@@ -1,0 +1,1295 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { facultyProfileService } from '../../services/faculty_profile.service.js';
+import { toast } from 'sonner';
+import AparShellHeader from '../../components/AparShellHeader.jsx';
+import FileUpload from '../../components/FileUpload.jsx';
+import { FiUser, FiMapPin, FiBriefcase, FiBookOpen, FiLink, FiCheckCircle, FiAlertCircle } from 'react-icons/fi';
+import { Api } from '../../api/Api.js';
+
+const api = new Api();
+
+const getDocumentUrl = (path) => {
+    if (typeof path === 'string' && /^(document|profilepicture|additional documents|profile)\//.test(path)) {
+        return `${api.client.defaults.baseURL}/apar/mongo/document?path=${encodeURIComponent(path)}`;
+    }
+    return path;
+};
+
+export default function Profile() {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  
+  // Education form state
+  const emptyEdu = { degree: '', course: '', field_of_study: '', institution_name: '', university_board: '', year_of_passing: '', status: '', start_date: '', end_date: '', percentage_cgpa: '', certificate_url: '', exam_name: '', other_exam_name: '', exam_subject: '', conducting_org: '', year_of_qualification: '' };
+  const [eduForm, setEduForm] = useState(emptyEdu);
+  const [eduFormErrors, setEduFormErrors] = useState({});
+  const [editEduIndex, setEditEduIndex] = useState(-1);
+  const [showEduForm, setShowEduForm] = useState(false);
+
+  const [saveStatus, setSaveStatus] = useState('idle'); // idle | saving | saved | error
+  const [errorSummary, setErrorSummary] = useState([]);
+  const summaryRef = useRef(null);
+  const [saveError, setSaveError] = useState(null);
+  const [educationError, setEducationError] = useState('');
+  const eduSectionRef = useRef(null);
+  const [profile, setProfile] = useState({
+    faculty_id: '',
+    basic_info: {},
+    contact_info: {},
+    professional_info: { current_courses: [] },
+    educational_qualifications: [],
+    social_links: {}
+  });
+  const [errors, setErrors] = useState({});
+  const [sameAddress, setSameAddress] = useState(false);
+  const [newSpec, setNewSpec] = useState('');
+  const [isOtherNationality, setIsOtherNationality] = useState(false);
+
+  const GENDER_OPTIONS = ['Male', 'Female', 'Other', 'Prefer not to say'];
+  const MARITAL_STATUS_OPTIONS = ['Single', 'Married', 'Divorced', 'Widowed', 'Other'];
+  const EMPLOYMENT_TYPES = ['Full-time', 'Part-time', 'Visiting Faculty', 'Contract'];
+  const CASTE_OPTIONS = ['General', 'OBC', 'SC', 'ST', 'EWS'];
+  const INDIA_STATES = [
+    'Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chhattisgarh','Goa','Gujarat','Haryana','Himachal Pradesh','Jharkhand','Karnataka','Kerala','Madhya Pradesh','Maharashtra','Manipur','Meghalaya','Mizoram','Nagaland','Odisha','Punjab','Rajasthan','Sikkim','Tamil Nadu','Telangana','Tripura','Uttar Pradesh','Uttarakhand','West Bengal',
+    'Andaman and Nicobar Islands','Chandigarh','Dadra and Nagar Haveli and Daman and Diu','Delhi','Jammu and Kashmir','Ladakh','Lakshadweep','Puducherry'
+  ];
+  const DESIGNATIONS = ['Professor','Associate Professor','Assistant Professor'];
+  const DEGREE_OPTIONS = ['10th', 'Diploma', '12th', 'Graduation', 'Post Graduation', 'M.Phil', 'Competitive Exams', 'PhD', 'Post Doc', 'Others'];
+  const DEGREE_ORDER = { '10th': 1, 'Diploma': 2, '12th': 3, 'Graduation': 4, 'Post Graduation': 5, 'M.Phil': 6, 'Competitive Exams': 7, 'PhD': 8, 'Post Doc': 9, 'Others': 10 };
+  const PRESENT_GRADE_OPTIONS = Array.from({ length: 11 }, (_, i) => 10 + i); // 10..20
+
+  const inputBase = 'w-full px-4 py-2.5 bg-gray-50/50 border border-gray-200/60 rounded-xl focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-400 focus:bg-white transition-all duration-300 text-gray-800 placeholder-gray-400 shadow-[inset_0_2px_4px_rgba(0,0,0,0.02)]';
+  const labelBase = 'block text-sm font-semibold text-gray-700 mb-1.5 tracking-wide';
+  const errorText = 'mt-1.5 text-xs font-medium text-red-500 flex items-center gap-1';
+
+  const todayISO = useMemo(() => new Date().toISOString().substring(0,10), []);
+  const maxDobISO = useMemo(() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 18);
+    return d.toISOString().substring(0, 10);
+  }, []);
+
+  const getByPath = (obj, path) => path.split('.').reduce((o,k)=>o?.[k], obj);
+  const setByPath = (obj, path, value) => {
+    const keys = path.split('.');
+    const next = { ...obj };
+    let o = next;
+    for (let i=0;i<keys.length-1;i++) {
+      const k = keys[i];
+      o[k] = o[k] ? { ...o[k] } : {};
+      o = o[k];
+    }
+    o[keys[keys.length-1]] = value;
+    return next;
+  };
+
+  const handleRemoveQualification = async (idx) => {
+    const prevList = Array.isArray(profile.educational_qualifications) ? profile.educational_qualifications : [];
+    if (idx < 0 || idx >= prevList.length) return;
+    
+    // Check if removal would leave no qualifications
+    if (prevList.length <= 1) {
+      toast.error('Cannot remove the last qualification. At least one qualification is required.');
+      return;
+    }
+    
+    const newList = prevList.slice();
+    newList.splice(idx, 1);
+    const updated = { ...profile, educational_qualifications: newList };
+
+    // Optimistic UI update
+    setProfile(updated);
+
+    // Recompute education-related errors for new indices
+    setErrors((prevErrs) => {
+      const base = Object.fromEntries(
+        Object.entries(prevErrs).filter(([k]) => !k.startsWith('educational_qualifications.'))
+      );
+      const eduErrs = {};
+      newList.forEach((q, i) => {
+        const yp = validateField(`educational_qualifications.${i}.year_of_passing`, q?.year_of_passing);
+        if (yp) eduErrs[`educational_qualifications.${i}.year_of_passing`] = yp;
+        const pc = validateField(`educational_qualifications.${i}.percentage_cgpa`, q?.percentage_cgpa);
+        if (pc) eduErrs[`educational_qualifications.${i}.percentage_cgpa`] = pc;
+      });
+      return { ...base, ...eduErrs };
+    });
+
+    try {
+      await facultyProfileService.upsertSelf(updated);
+      toast.success('Education removed');
+    } catch (e) {
+      console.error('Failed to remove qualification:', e);
+      // revert on failure
+      setProfile((prev) => ({ ...prev, educational_qualifications: prevList }));
+      toast.error(e?.response?.data?.message || e?.message || 'Failed to remove education');
+    }
+  };
+
+  // Sanitizers
+  const sanitizeAlpha = (v) => v.replace(/[^A-Za-z ]+/g, '').slice(0, 100);
+  const sanitizeAlphaNum = (v) => v.replace(/[^A-Za-z0-9 ]+/g, '').slice(0, 100);
+  const sanitizeAlphaNumLoose = (v) => v.replace(/[^A-Za-z0-9 .,-/]+/g, '').slice(0, 200);
+  const sanitizeDesignation = (v) => v.replace(/[^A-Za-z .]+/g, '').slice(0, 80);
+  const sanitizeDepartment = (v) => v.replace(/[^A-Za-z0-9 ]+/g, '').slice(0, 80);
+  const sanitizeSpecialization = (v) => v.replace(/[^A-Za-z0-9 ]+/g, '').slice(0, 120);
+  const sanitizePhone = (v) => v.replace(/[^0-9]+/g, '').slice(0, 10);
+  const sanitizePostal = (v) => v.replace(/[^0-9]+/g, '').slice(0, 6);
+  const sanitizeNumeric = (v) => v.replace(/[^0-9]+/g, '');
+  const sanitizePercent = (v) => v.replace(/[^0-9.]+/g, '').slice(0, 6);
+  const sanitizeCourses = (v) => v.split(',').map(s => s.replace(/[^A-Za-z0-9 \-]+/g, '').trim()).filter(Boolean);
+
+  const isEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+  const isUrl = (v) => /^https?:\/\//i.test(v) && /\./.test(v);
+  const isPhone = (v) => /^[6-9]\d{9}$/.test(v);
+  const isAadhaar = (v) => /^\d{12}$/.test(v);
+  const isPostal = (v) => /^[1-9]\d{5}$/.test(v);
+  const isOrcid = (v) => /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/.test(v);
+  const isScopusId = (v) => /^\d{5,}$/.test(v);
+  const isPastOrToday = (iso) => {
+    if (!iso) return true;
+    try { return new Date(iso) <= new Date(); } catch { return false; }
+  };
+
+  const validateField = (path, value) => {
+    const val = typeof value === 'string' ? value.trim() : value;
+    const label = path.split('.').slice(-1)[0].replace(/_/g, ' ');
+    switch (path) {
+      case 'basic_info.full_name':
+        if (!val) return 'Full Name is required';
+        if (!/^[A-Za-z ]{2,100}$/.test(val)) return 'Only letters and spaces (2-100)';
+        return '';
+      case 'basic_info.gender':
+        if (!val) return 'Gender is required';
+        return '';
+      case 'basic_info.aadhaar_card':
+        if (!val) return 'Aadhaar Card is required';
+        if (!isAadhaar(val)) return 'Aadhaar must be exactly 12 digits';
+        return '';
+      case 'basic_info.nationality':
+        if (!val) return 'Nationality is required';
+        if (!/^[A-Za-z ]+$/.test(val)) return 'Only letters and spaces allowed';
+        return '';
+      case 'basic_info.marital_status':
+        if (!val) return 'Marital Status is required';
+        return '';
+      case 'contact_info.mobile_number':
+        if (!val) return 'Mobile Number is required';
+        if (!isPhone(val)) return 'Enter a valid 10-digit mobile (starts 6-9)';
+        return '';
+      case 'contact_info.alternate_mobile_number':
+        if (val && !isPhone(val)) return 'Enter a valid 10-digit mobile';
+        return '';
+      case 'contact_info.email_address':
+        if (!val) return 'Email is required';
+        if (!isEmail(val)) return 'Enter a valid email';
+        return '';
+      case 'contact_info.alternate_email_address':
+        if (val && !isEmail(val)) return 'Enter a valid email';
+        return '';
+      case 'contact_info.current_address':
+        if (!val) return 'Current Address is required';
+        if (val && /[^A-Za-z0-9 .,\-\/]/.test(val)) return 'Only letters, numbers, space, , . - / allowed';
+        return '';
+      case 'contact_info.city':
+        if (!val) return 'City is required';
+        if (val && !/^[A-Za-z ]+$/.test(val)) return 'Only letters allowed (no numbers or special characters)';
+        return '';
+      case 'contact_info.state':
+        if (!val) return 'State is required';
+        if (val && !/^[A-Za-z ]+$/.test(val)) return 'Only letters allowed (no numbers or special characters)';
+        return '';
+      case 'contact_info.postal_code':
+        if (!val) return 'Postal Code is required';
+        if (val && !isPostal(val)) return 'Enter a valid 6-digit PIN code';
+        return '';
+      case 'contact_info.emergency_contact_name':
+        if (val && !/^[A-Za-z ]+$/.test(val)) return 'Only letters allowed (no numbers or special characters)';
+        return '';
+      case 'contact_info.emergency_contact_number':
+        if (val && !isPhone(val)) return 'Enter a valid 10-digit mobile';
+        return '';
+      case 'contact_info.permanent_address':
+        if (!val) return 'Permanent Address is required';
+        if (val && /[^A-Za-z0-9 .,\-\/]/.test(val)) return 'Only letters, numbers, space, , . - / allowed';
+        return '';
+      case 'contact_info.permanent_city':
+        if (!val) return 'Permanent City is required';
+        if (val && !/^[A-Za-z ]+$/.test(val)) return 'Only letters allowed (no numbers or special characters)';
+        return '';
+      case 'contact_info.permanent_state':
+        if (!val) return 'Permanent State is required';
+        if (val && !/^[A-Za-z ]+$/.test(val)) return 'Only letters allowed (no numbers or special characters)';
+        return '';
+      case 'contact_info.permanent_postal_code':
+        if (!val) return 'Permanent Postal Code is required';
+        if (val && !isPostal(val)) return 'Enter a valid 6-digit PIN code';
+        return '';
+      case 'professional_info.faculty_staff_id':
+        if (val && !/^[A-Za-z0-9]+$/.test(val)) return 'Only letters and numbers allowed';
+        return '';
+      case 'professional_info.designation':
+        if (val && !/^[A-Za-z .]+$/.test(val)) return 'Only letters, spaces and dot';
+        return '';
+      case 'professional_info.department':
+        if (val && !/^[A-Za-z0-9 ]+$/.test(val)) return 'Only letters, numbers and spaces';
+        return '';
+      case 'professional_info.specialization':
+        if (!val || !Array.isArray(val) || val.length === 0) return 'At least one specialization is required';
+        return '';
+      case 'professional_info.date_of_joining':
+        if (!val) return 'Date of Joining is required';
+        if (val) {
+          if (!isPastOrToday(val)) return 'Date cannot be in the future';
+          const dobStr = profile.basic_info?.date_of_birth;
+          if (dobStr) {
+            const dob = new Date(dobStr);
+            const doj = new Date(val);
+            if (!isNaN(dob) && !isNaN(doj)) {
+              if (doj < dob) {
+                return 'Date of Joining cannot be before Date of Birth';
+              }
+              let ageAtJoining = doj.getFullYear() - dob.getFullYear();
+              const m = doj.getMonth() - dob.getMonth();
+              if (m < 0 || (m === 0 && doj.getDate() < dob.getDate())) {
+                ageAtJoining--;
+              }
+              if (ageAtJoining < 18) return 'Must be at least 18 years after Date of Birth';
+            }
+          }
+        }
+        return '';
+      case 'professional_info.date_of_continuous_employment':
+        if (!val) return 'Date of Continuous Employment is required';
+        if (val) {
+          if (!isPastOrToday(val)) return 'Date cannot be in the future';
+          const dojStr = profile.professional_info?.date_of_joining;
+          if (dojStr) {
+            const doj = new Date(dojStr);
+            const dce = new Date(val);
+            if (!isNaN(doj) && !isNaN(dce) && dce < doj) {
+              return 'Cannot be earlier than Date of Joining';
+            }
+          }
+        }
+        return '';
+      case 'professional_info.employment_type':
+        if (!val) return 'Employment Type is required';
+        return '';
+      case 'basic_info.date_of_birth':
+        if (!val) return 'Date of Birth is required';
+        if (val) {
+          if (!isPastOrToday(val)) return 'Date cannot be in the future';
+          const dob = new Date(val);
+          const today = new Date();
+          let age = today.getFullYear() - dob.getFullYear();
+          const m = today.getMonth() - dob.getMonth();
+          if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) {
+            age--;
+          }
+          if (age < 18) return 'Minimum age must be 18 years';
+        }
+        return '';
+      case 'professional_info.years_of_experience':
+        if (val !== null && val !== undefined && String(val) !== '') {
+          const n = Number(val);
+          if (!Number.isFinite(n) || n < 0 || n > 70) return 'Enter a number between 0 and 70';
+        }
+        return '';
+      case 'professional_info.office_contact_number':
+        if (val && !isPhone(val)) return 'Enter a valid 10-digit mobile';
+        return '';
+      case 'social_links.google_scholar_profile':
+        if (!val) return 'Google Scholar Profile is required';
+        if (val && !isUrl(val)) return 'Enter a valid http(s) URL';
+        return '';
+      case 'social_links.researchgate_profile':
+        if (!val) return 'ResearchGate Profile is required';
+        if (val && !isUrl(val)) return 'Enter a valid http(s) URL';
+        return '';
+      case 'social_links.orcid_id':
+        if (val && !isOrcid(val)) return 'Format: 0000-0000-0000-000X';
+        return '';
+      case 'social_links.scopus_author_id':
+        if (!val) return 'Scopus Author ID is required';
+        if (val && !isScopusId(val)) return 'Digits only';
+        return '';
+      case 'basic_info.caste_category':
+        if (!val) return 'Category is required';
+        return '';
+      case 'professional_info.present_grade':
+        if (!val) return 'Present Grade is required';
+        return '';
+      default:
+        if (path.startsWith('contact_info.current_address') || path.startsWith('contact_info.permanent_address')) {
+          if (val && /[^A-Za-z0-9 .,\-\/]/.test(val)) return 'Only letters, numbers, space, , . - / allowed';
+        }
+        if (path.includes('educational_qualifications')) {
+          if (path.endsWith('.year_of_passing')) {
+            if (val) {
+              const n = Number(val);
+              const y = new Date().getFullYear();
+              if (!Number.isInteger(n) || n < 1900 || n > y) return `Year between 1900 and ${y}`;
+            }
+          }
+          if (path.endsWith('.percentage_cgpa')) {
+            if (val) {
+              const n = Number(val);
+              if (!Number.isFinite(n) || n < 0 || n > 100) return 'Enter a number between 0 and 100';
+            }
+          }
+        }
+        return '';
+    }
+  };
+
+  const setErrorFor = (path, message) => setErrors(prev => ({ ...prev, [path]: message }));
+  const clearErrorFor = (path) => setErrors(prev => { const n = { ...prev }; delete n[path]; return n; });
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const p = await facultyProfileService.getSelf();
+        // Ensure specialization is an array
+        const fixed = { ...p };
+        const spec = p?.professional_info?.specialization;
+        if (!Array.isArray(spec)) {
+          fixed.professional_info = fixed.professional_info || {};
+          fixed.professional_info.specialization = spec ? [String(spec)] : [];
+        }
+        if (Array.isArray(fixed.educational_qualifications)) {
+          fixed.educational_qualifications.sort((a, b) => 
+            (DEGREE_ORDER[a.degree] || 99) - (DEGREE_ORDER[b.degree] || 99)
+          );
+        }
+        if (fixed.basic_info?.nationality && fixed.basic_info.nationality !== 'Indian') {
+          setIsOtherNationality(true);
+        }
+        console.info('[Profile] Loaded profile payload', fixed);
+        setProfile(fixed);
+      } catch (e) {
+        console.error('[Profile] Failed to load profile', e?.response?.data || e);
+        toast.error('Failed to load profile');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const update = (path, value) => {
+    setProfile((prev) => setByPath(prev, path, value));
+    const msg = validateField(path, value);
+    if (msg) setErrorFor(path, msg); else clearErrorFor(path);
+    // keep permanent address in sync when checkbox is on
+    if (sameAddress) {
+      if (path === 'contact_info.current_address') {
+        setProfile((prev) => setByPath(prev, 'contact_info.permanent_address', value || ''));
+      }
+      if (path === 'contact_info.city') {
+        setProfile((prev) => setByPath(prev, 'contact_info.permanent_city', value || ''));
+      }
+      if (path === 'contact_info.state') {
+        setProfile((prev) => setByPath(prev, 'contact_info.permanent_state', value || ''));
+      }
+      if (path === 'contact_info.postal_code') {
+        setProfile((prev) => setByPath(prev, 'contact_info.permanent_postal_code', value || ''));
+      }
+    }
+    // Auto-sync: Employee ID -> Faculty/Staff ID
+    // No auto-sync from Aadhaar to Employee ID
+  };
+
+  const handleAddQualification = () => {
+    setEduForm({ ...emptyEdu, degree: 'Graduation' });
+    setEduFormErrors({});
+    setEditEduIndex(-1);
+    setShowEduForm(true);
+  };
+
+  const handleEditQualification = (idx) => {
+    setEduForm(profile.educational_qualifications[idx]);
+    setEduFormErrors({});
+    setEditEduIndex(idx);
+    setShowEduForm(true);
+  };
+
+  const validateEduForm = () => {
+    const errs = {};
+    if (!eduForm.degree) errs.degree = 'Degree is required';
+    if (eduForm.degree === 'Competitive Exams') {
+        if (!eduForm.exam_name) errs.exam_name = 'Type of Exam is required';
+        if (eduForm.exam_name === 'Others' && !eduForm.other_exam_name) errs.other_exam_name = 'Please specify the exam name';
+        if (!eduForm.exam_subject) errs.exam_subject = 'Subject is required';
+        if (!eduForm.conducting_org) errs.conducting_org = 'Conducting Organization is required';
+        if (!eduForm.year_of_qualification) errs.year_of_qualification = 'Year of Qualification is required';
+        if (!eduForm.percentage_cgpa) errs.percentage_cgpa = 'Score / Rank / Percentile is required';
+    } else {
+        if (!eduForm.course) errs.course = 'Course is required';
+        if (!eduForm.field_of_study) errs.field_of_study = 'Field of Study is required';
+        if (!eduForm.institution_name) errs.institution_name = 'Institution is required';
+        if (!eduForm.university_board) errs.university_board = 'University/Board is required';
+        
+        if (eduForm.degree === 'PhD' || eduForm.degree === 'Post Doc') {
+            if (!eduForm.status) errs.status = 'Status is required';
+            else {
+                if (eduForm.status === 'Ongoing' && !eduForm.start_date) errs.start_date = 'Start Date is required';
+                if (eduForm.status === 'Completed') {
+                    if (!eduForm.start_date) errs.start_date = 'Start Date is required';
+                    if (!eduForm.end_date) errs.end_date = 'End Date is required';
+                    if (eduForm.start_date && eduForm.end_date && new Date(eduForm.start_date) >= new Date(eduForm.end_date)) {
+                        errs.end_date = 'End date must be after start date';
+                    }
+                }
+            }
+            if (eduForm.status !== 'Ongoing') {
+                if (!eduForm.percentage_cgpa) errs.percentage_cgpa = 'Percentage/CGPA is required';
+            }
+        } else {
+            if (!eduForm.start_date) errs.start_date = 'Start Date is required';
+            if (!eduForm.end_date) errs.end_date = 'End Date is required';
+            if (eduForm.start_date && eduForm.end_date && new Date(eduForm.start_date) >= new Date(eduForm.end_date)) {
+                errs.end_date = 'End date must be after start date';
+            }
+            if (!eduForm.percentage_cgpa) errs.percentage_cgpa = 'Percentage/CGPA is required';
+        }
+    }
+
+    if (eduForm.percentage_cgpa) {
+        const pc = validateField(`educational_qualifications.0.percentage_cgpa`, eduForm.percentage_cgpa);
+        if (pc) errs.percentage_cgpa = pc;
+    }
+
+    const isOngoingPhdOrPostDoc = (eduForm.degree === 'PhD' || eduForm.degree === 'Post Doc') && eduForm.status === 'Ongoing';
+    if (!isOngoingPhdOrPostDoc && !eduForm.certificate_url) {
+        errs.certificate_url = 'Document upload is required';
+    }
+    setEduFormErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
+  const handleSaveEduForm = () => {
+    if (!validateEduForm()) return;
+    setProfile(prev => {
+      const list = Array.isArray(prev.educational_qualifications) ? [...prev.educational_qualifications] : [];
+      if (editEduIndex >= 0) {
+        list[editEduIndex] = eduForm;
+      } else {
+        list.push(eduForm);
+      }
+      
+      list.sort((a, b) => 
+        (DEGREE_ORDER[a.degree] || 99) - (DEGREE_ORDER[b.degree] || 99)
+      );
+
+      return { ...prev, educational_qualifications: list };
+    });
+    setShowEduForm(false);
+    if (String(eduForm.degree).trim().toLowerCase() === 'graduation') setEducationError('');
+  };
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    // Final validation
+    const pathsToValidate = [
+      'basic_info.full_name','basic_info.aadhaar_card','basic_info.pan_card','basic_info.gender','basic_info.date_of_birth','basic_info.nationality','basic_info.marital_status','basic_info.caste_category',
+      'contact_info.mobile_number','contact_info.email_address','contact_info.current_address','contact_info.city','contact_info.state','contact_info.postal_code','contact_info.emergency_contact_number','contact_info.emergency_contact_name',
+      'contact_info.permanent_address','contact_info.permanent_city','contact_info.permanent_state','contact_info.permanent_postal_code',
+      'professional_info.faculty_staff_id','professional_info.designation','professional_info.department','professional_info.date_of_joining','professional_info.years_of_experience','professional_info.office_contact_number',
+      'professional_info.date_of_continuous_employment','professional_info.present_grade','professional_info.specialization',
+      'social_links.google_scholar_profile','social_links.researchgate_profile','social_links.orcid_id','social_links.scopus_author_id','social_links.vidwan_id'
+    ];
+    const newErrors = {};
+    for (const pth of pathsToValidate) {
+      const val = getByPath(profile, pth);
+      const msg = validateField(pth, val);
+      if (msg) newErrors[pth] = msg;
+    }
+    // Validate qualifications
+    (profile.educational_qualifications||[]).forEach((q, idx) => {
+      const yp = validateField(`educational_qualifications.${idx}.year_of_passing`, q?.year_of_passing);
+      if (yp) newErrors[`educational_qualifications.${idx}.year_of_passing`] = yp;
+      const pc = validateField(`educational_qualifications.${idx}.percentage_cgpa`, q?.percentage_cgpa);
+      if (pc) newErrors[`educational_qualifications.${idx}.percentage_cgpa`] = pc;
+    });
+    
+    const requiredDegrees = ['10th', 'Graduation', 'Post Graduation'];
+    const hasRequired = requiredDegrees.every(req => 
+      (profile.educational_qualifications || []).some(q => q.degree === req)
+    );
+    if (!hasRequired) {
+      setEducationError('10th, Graduation, and Post Graduation are mandatory qualifications.');
+      newErrors['educational_qualifications'] = 'Missing mandatory qualifications';
+    } else {
+      setEducationError('');
+    }
+
+    setErrors(newErrors);
+    if (Object.keys(newErrors).length) {
+      console.warn('[Profile] Validation failed before save', newErrors);
+      const list = Array.from(new Set(Object.values(newErrors).filter(Boolean)));
+      setErrorSummary(list);
+      toast.error('Oops! Please review the highlighted fields and correct the errors.');
+      
+      // Scroll to the first error element for a friendly user experience
+      setTimeout(() => {
+        const firstErrorEl = document.querySelector('.border-red-500');
+        if (firstErrorEl) {
+          firstErrorEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          firstErrorEl.focus();
+        } else {
+          try { summaryRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {}
+        }
+      }, 100);
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setSaveStatus('saving');
+      console.info('[Profile] Submitting profile payload', profile);
+      const saved = await facultyProfileService.upsertSelf(profile);
+      console.info('[Profile] Save success response', saved);
+      setProfile(saved);
+      toast.success('Profile saved');
+      setSaveStatus('saved');
+      setTimeout(() => setSaveStatus('idle'), 3000);
+      setErrorSummary([]);
+      setSaveError(null);
+      setEducationError('');
+    } catch (e) {
+      const status = e?.response?.status;
+      const data = e?.response?.data;
+      console.group('[Profile] Save error');
+      console.error('Status:', status);
+      console.error('Message:', e?.message);
+      console.error('Response data:', data);
+      console.error('Full error:', e);
+      console.groupEnd();
+      try { if (typeof window !== 'undefined') window.__lastProfileSaveError = e; } catch (_) {}
+      const msg = e?.response?.data?.message || 'Failed to save profile';
+      toast.error(msg);
+      let details = [];
+      const raw = e?.response?.data;
+      const arr = (raw && (raw.errors || raw.issues || raw.details)) || [];
+      if (Array.isArray(arr)) {
+        details = arr.map((it) => typeof it === 'string' ? it : (it?.message || JSON.stringify(it)));
+      }
+      setSaveError({ message: msg, details });
+      setSaveStatus('error');
+      setTimeout(() => setSaveStatus('idle'), 4000);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="apar-page-bg min-h-screen flex items-center justify-center relative overflow-hidden">
+        {/* Decorative Background Blur */}
+        <div className="absolute top-20 left-20 w-72 h-72 bg-indigo-500/20 rounded-full blur-[100px] pointer-events-none"></div>
+        <div className="absolute bottom-20 right-20 w-72 h-72 bg-purple-500/20 rounded-full blur-[100px] pointer-events-none"></div>
+        <div className="bg-white/80 backdrop-blur-md px-6 py-4 rounded-2xl shadow-xl border border-white flex items-center gap-3">
+          <div className="w-5 h-5 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>
+          <span className="text-sm font-medium text-gray-700 tracking-wide">Loading profile...</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="apar-page-bg min-h-screen py-10 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
+      {/* Premium Decorative Background */}
+      <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none z-0">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-indigo-500/10 rounded-full blur-[120px]"></div>
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-500/10 rounded-full blur-[120px]"></div>
+        <div className="absolute top-[40%] right-[10%] w-[20%] h-[20%] bg-emerald-500/5 rounded-full blur-[100px]"></div>
+      </div>
+      
+      <div className="mx-auto max-w-5xl relative z-10">
+        <AparShellHeader
+          title="My Profile"
+          subtitle="Update your personal and professional information"
+          backTo="/apar/dashboard"
+          backLabel="Dashboard"
+          actions={
+            <div className="flex items-center gap-3">
+              {saveStatus === 'saving' && (
+                <span className="text-sm font-medium text-indigo-700">Saving...</span>
+              )}
+              {saveStatus === 'saved' && (
+                <span className="text-sm font-medium text-emerald-700">Changes saved</span>
+              )}
+              {saveStatus === 'error' && (
+                <span className="text-sm font-medium text-red-600">Save failed</span>
+              )}
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={saving}
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {saving ? 'Saving…' : 'Save Changes'}
+              </button>
+            </div>
+          }
+        />
+
+        {saveError && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-lg">
+              <div className="text-lg font-semibold text-red-600">Save failed</div>
+              <div className="mt-2 text-sm text-gray-700">{saveError.message}</div>
+              {Array.isArray(saveError.details) && saveError.details.length > 0 && (
+                <ul className="mt-3 list-disc pl-5 text-sm text-gray-700 space-y-1">
+                  {saveError.details.map((d, i) => (
+                    <li key={`${i}-${d}`}>{d}</li>
+                  ))}
+                </ul>
+              )}
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSaveError(null)}
+                  className="rounded-md bg-gray-200 px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-300"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Error Summary */}
+        {Array.isArray(errorSummary) && errorSummary.length > 0 && (
+          <div ref={summaryRef} className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+            <div className="font-semibold mb-2">Please fix the following:</div>
+            <ul className="list-disc pl-5 space-y-1">
+              {errorSummary.map((msg, i) => (
+                <li key={`${msg}-${i}`}>{msg}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <form onSubmit={handleSave} className="space-y-8">
+          <section className="bg-white/80 backdrop-blur-md rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-white p-6 md:p-8 relative overflow-hidden group">
+            <div className="absolute top-0 left-0 w-2 h-full bg-gradient-to-b from-indigo-500 to-purple-500 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+            <div className="flex items-center gap-3 mb-6 border-b border-gray-100/50 pb-4">
+              <div className="p-2.5 bg-indigo-50 rounded-xl">
+                <FiUser className="w-5 h-5 text-indigo-600" />
+              </div>
+              <h2 className="text-xl font-bold text-gray-900 tracking-tight">Basic Information</h2>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              <div>
+                <label className={labelBase}>Full Name <span className="text-red-500">*</span></label>
+                <input className={`${inputBase} ${errors['basic_info.full_name'] ? 'border-red-500' : ''}`} value={profile.basic_info?.full_name || ''} onChange={(e) => update('basic_info.full_name', sanitizeAlpha(e.target.value))} placeholder="e.g. Dr. John Doe" />
+                {errors['basic_info.full_name'] && <div className={errorText}>{errors['basic_info.full_name']}</div>}
+              </div>
+              <div>
+                <label className={labelBase}>Aadhaar Card <span className="text-red-500">*</span></label>
+                <input className={`${inputBase} ${errors['basic_info.aadhaar_card'] ? 'border-red-500' : ''}`} value={profile.basic_info?.aadhaar_card || ''} onChange={(e) => update('basic_info.aadhaar_card', e.target.value.replace(/[^0-9]/g, ''))} maxLength={12} required placeholder="12-digit Aadhaar Number" />
+                {errors['basic_info.aadhaar_card'] && <div className={errorText}>{errors['basic_info.aadhaar_card']}</div>}
+              </div>
+              <div>
+                <label className={labelBase}>PAN No <span className="text-red-500">*</span></label>
+                <input className={`${inputBase} ${errors['basic_info.pan_card'] ? 'border-red-500' : ''}`} value={profile.basic_info?.pan_card || ''} onChange={(e) => update('basic_info.pan_card', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))} maxLength={10} required placeholder="10-character PAN" />
+                {errors['basic_info.pan_card'] && <div className={errorText}>{errors['basic_info.pan_card']}</div>}
+              </div>
+              <div>
+                <label className={labelBase}>Gender <span className="text-red-500">*</span></label>
+                <select
+                  className={`${inputBase} ${errors['basic_info.gender'] ? 'border-red-500' : ''}`}
+                  value={profile.basic_info?.gender || ''}
+                  onChange={(e) => update('basic_info.gender', e.target.value)}
+                  required
+                >
+                  <option value="">Select</option>
+                  {GENDER_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+                {errors['basic_info.gender'] && <div className={errorText}>{errors['basic_info.gender']}</div>}
+              </div>
+              <div>
+                <label className={labelBase}>Date of Birth <span className="text-red-500">*</span></label>
+                <input type="date" max={maxDobISO} className={`${inputBase} ${errors['basic_info.date_of_birth'] ? 'border-red-500' : ''}`} value={profile.basic_info?.date_of_birth ? String(profile.basic_info.date_of_birth).substring(0,10) : ''} onChange={(e) => update('basic_info.date_of_birth', e.target.value)} />
+                {errors['basic_info.date_of_birth'] && <div className={errorText}>{errors['basic_info.date_of_birth']}</div>}
+              </div>
+              <div>
+                <label className={labelBase}>Nationality <span className="text-red-500">*</span></label>
+                <select
+                  className={`${inputBase} ${errors['basic_info.nationality'] && !isOtherNationality ? 'border-red-500' : ''}`}
+                  value={isOtherNationality ? 'Other' : (profile.basic_info?.nationality === 'Indian' ? 'Indian' : '')}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === 'Indian') {
+                      setIsOtherNationality(false);
+                      update('basic_info.nationality', 'Indian');
+                    } else if (val === 'Other') {
+                      setIsOtherNationality(true);
+                      update('basic_info.nationality', '');
+                    } else {
+                      setIsOtherNationality(false);
+                      update('basic_info.nationality', '');
+                    }
+                  }}
+                  required
+                >
+                  <option value="">Select</option>
+                  <option value="Indian">Indian</option>
+                  <option value="Other">Other</option>
+                </select>
+                {isOtherNationality && (
+                  <div className="mt-2">
+                    <input
+                      className={`${inputBase} ${errors['basic_info.nationality'] ? 'border-red-500' : ''}`}
+                      value={profile.basic_info?.nationality || ''}
+                      onChange={(e) => update('basic_info.nationality', sanitizeAlpha(e.target.value))}
+                      required
+                      placeholder="Specify your nationality"
+                    />
+                  </div>
+                )}
+                {errors['basic_info.nationality'] && <div className={errorText}>{errors['basic_info.nationality']}</div>}
+              </div>
+              <div>
+                <label className={labelBase}>Marital Status <span className="text-red-500">*</span></label>
+                <select
+                  className={`${inputBase} ${errors['basic_info.marital_status'] ? 'border-red-500' : ''}`}
+                  value={profile.basic_info?.marital_status || ''}
+                  onChange={(e) => update('basic_info.marital_status', e.target.value)}
+                  required
+                >
+                  <option value="">Select</option>
+                  {MARITAL_STATUS_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+                {errors['basic_info.marital_status'] && <div className={errorText}>{errors['basic_info.marital_status']}</div>}
+              </div>
+              <div>
+                <label className={labelBase}>Category <span className="text-red-500">*</span></label>
+                <select className={`${inputBase} ${errors['basic_info.caste_category'] ? 'border-red-500' : ''}`} value={profile.basic_info?.caste_category || ''} onChange={(e) => update('basic_info.caste_category', e.target.value)}>
+                  <option value="">Select Category</option>
+                  {CASTE_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+                {errors['basic_info.caste_category'] && <div className={errorText}>{errors['basic_info.caste_category']}</div>}
+              </div>
+            </div>
+          </section>
+
+          <section className="bg-white/80 backdrop-blur-md rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-white p-6 md:p-8 relative overflow-hidden group">
+            <div className="absolute top-0 left-0 w-2 h-full bg-gradient-to-b from-emerald-500 to-teal-500 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+            <div className="flex items-center gap-3 mb-6 border-b border-gray-100/50 pb-4">
+              <div className="p-2.5 bg-emerald-50 rounded-xl">
+                <FiMapPin className="w-5 h-5 text-emerald-600" />
+              </div>
+              <h2 className="text-xl font-bold text-gray-900 tracking-tight">Contact Information</h2>
+            </div>
+            {/* Contact Details */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mb-8">
+              {[
+                ['contact_info.mobile_number','Mobile Number', true, '10-digit mobile'],
+                ['contact_info.alternate_mobile_number','Alternate Mobile Number', false, '10-digit alternate mobile'],
+                ['contact_info.email_address','Email Address', true, 'e.g. john@dtu.ac.in'],
+                ['contact_info.alternate_email_address','Alternate Email Address', false, 'e.g. personal@gmail.com'],
+                ['contact_info.emergency_contact_name','Emergency Contact Name', false, 'Name of contact person'],
+                ['contact_info.emergency_contact_number','Emergency Contact Number', false, '10-digit emergency contact']
+              ].map(([path,label, req, placeholder]) => (
+                <div key={path}>
+                  <label className={labelBase}>{label} {req && <span className="text-red-500">*</span>}</label>
+                  <input
+                    className={`${inputBase} ${errors[path] ? 'border-red-500' : ''}`}
+                    value={getByPath(profile, path) || ''}
+                    placeholder={placeholder}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      let v = raw;
+                      if (path.endsWith('mobile_number') || path.endsWith('emergency_contact_number')) v = sanitizePhone(raw);
+                      else if (path.endsWith('emergency_contact_name')) v = sanitizeAlpha(raw);
+                      update(path, v);
+                    }}
+                  />
+                  {errors[path] && <div className={errorText}>{errors[path]}</div>}
+                </div>
+              ))}
+            </div>
+
+            {/* Current Address */}
+            <div className="mb-4">
+              <h3 className="text-md font-semibold text-gray-900 mb-2">Current Address</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="sm:col-span-2">
+                  <label className={labelBase}>Address <span className="text-red-500">*</span></label>
+                  <input className={`${inputBase} ${errors['contact_info.current_address'] ? 'border-red-500' : ''}`} value={profile.contact_info?.current_address || ''} onChange={(e) => update('contact_info.current_address', sanitizeAlphaNumLoose(e.target.value))} placeholder="House No, Street, Landmark" />
+                  {errors['contact_info.current_address'] && <div className={errorText}>{errors['contact_info.current_address']}</div>}
+                </div>
+                <div>
+                  <label className={labelBase}>City <span className="text-red-500">*</span></label>
+                  <input className={`${inputBase} ${errors['contact_info.city'] ? 'border-red-500' : ''}`} value={profile.contact_info?.city || ''} onChange={(e) => update('contact_info.city', sanitizeAlpha(e.target.value))} placeholder="e.g. New Delhi" />
+                </div>
+                <div>
+                  <label className={labelBase}>State <span className="text-red-500">*</span></label>
+                  <select className={inputBase} value={profile.contact_info?.state || ''} onChange={(e) => update('contact_info.state', e.target.value)}>
+                    <option value="">Select State</option>
+                    {INDIA_STATES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={labelBase}>Postal Code <span className="text-red-500">*</span></label>
+                  <input className={`${inputBase} ${errors['contact_info.postal_code'] ? 'border-red-500' : ''}`} value={profile.contact_info?.postal_code || ''} onChange={(e) => update('contact_info.postal_code', sanitizePostal(e.target.value))} placeholder="6-digit PIN code" />
+                </div>
+                <div className="sm:col-span-2 flex items-center gap-2 mt-1">
+                  <input id="same-address" type="checkbox" className="h-4 w-4" checked={sameAddress} onChange={(e) => {
+                    const checked = e.target.checked;
+                    setSameAddress(checked);
+                    if (checked) {
+                      update('contact_info.permanent_address', profile.contact_info?.current_address || '');
+                      update('contact_info.permanent_city', profile.contact_info?.city || '');
+                      update('contact_info.permanent_state', profile.contact_info?.state || '');
+                      update('contact_info.permanent_postal_code', profile.contact_info?.postal_code || '');
+                    }
+                  }} />
+                  <label htmlFor="same-address" className="text-sm text-gray-700">Permanent address is same as current</label>
+                </div>
+              </div>
+            </div>
+
+            {/* Permanent Address */}
+            <div>
+              <h3 className="text-md font-semibold text-gray-900 mb-2">Permanent Address</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="sm:col-span-2">
+                  <label className={labelBase}>Address <span className="text-red-500">*</span></label>
+                  <input className={`${inputBase} ${errors['contact_info.permanent_address'] ? 'border-red-500' : ''}`} value={profile.contact_info?.permanent_address || ''} onChange={(e) => update('contact_info.permanent_address', sanitizeAlphaNumLoose(e.target.value))} disabled={sameAddress} placeholder="House No, Street, Landmark" />
+                  {errors['contact_info.permanent_address'] && <div className={errorText}>{errors['contact_info.permanent_address']}</div>}
+                </div>
+                <div>
+                  <label className={labelBase}>City <span className="text-red-500">*</span></label>
+                  <input className={`${inputBase} ${errors['contact_info.permanent_city'] ? 'border-red-500' : ''}`} value={profile.contact_info?.permanent_city || ''} onChange={(e) => update('contact_info.permanent_city', sanitizeAlpha(e.target.value))} disabled={sameAddress} placeholder="e.g. New Delhi" />
+                  {errors['contact_info.permanent_city'] && <div className={errorText}>{errors['contact_info.permanent_city']}</div>}
+                </div>
+                <div>
+                  <label className={labelBase}>State <span className="text-red-500">*</span></label>
+                  <select className={inputBase} value={profile.contact_info?.permanent_state || ''} onChange={(e) => update('contact_info.permanent_state', e.target.value)} disabled={sameAddress}>
+                    <option value="">Select State</option>
+                    {INDIA_STATES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={labelBase}>Postal Code <span className="text-red-500">*</span></label>
+                  <input className={`${inputBase} ${errors['contact_info.permanent_postal_code'] ? 'border-red-500' : ''}`} value={profile.contact_info?.permanent_postal_code || ''} onChange={(e) => update('contact_info.permanent_postal_code', sanitizePostal(e.target.value))} disabled={sameAddress} placeholder="6-digit PIN code" />
+                  {errors['contact_info.permanent_postal_code'] && <div className={errorText}>{errors['contact_info.permanent_postal_code']}</div>}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="bg-white/80 backdrop-blur-md rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-white p-6 md:p-8 relative overflow-hidden group">
+            <div className="absolute top-0 left-0 w-2 h-full bg-gradient-to-b from-blue-500 to-cyan-500 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+            <div className="flex items-center gap-3 mb-6 border-b border-gray-100/50 pb-4">
+              <div className="p-2.5 bg-blue-50 rounded-xl">
+                <FiBriefcase className="w-5 h-5 text-blue-600" />
+              </div>
+              <h2 className="text-xl font-bold text-gray-900 tracking-tight">Professional Information</h2>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              {[
+                ['professional_info.faculty_staff_id','Employee ID', '', false, 'Fetched from system'],
+                ['professional_info.designation','Designation', '', false, 'Select Designation'],
+                ['professional_info.department','Department', '', false, 'Fetched from system'],
+                ['professional_info.date_of_joining','Date of Joining','date', true, ''],
+                ['professional_info.date_of_continuous_employment','Date of Continuous Employment','date', true, ''],
+                ['professional_info.employment_type','Employment Type', '', true, 'Select Employment Type'],
+                ['professional_info.years_of_experience','Years of Experience','number', false, 'e.g. 10'],
+                ['professional_info.office_location','Office Location', '', false, 'e.g. Block 1, Room 204'],
+                ['professional_info.office_contact_number','Office Contact Number', '', false, 'e.g. 011-2345678'],
+                ['professional_info.present_grade','Present Grade', '', true, 'Select Grade']
+              ].map(([path,label,type,req,placeholder]) => (
+                <div key={path}>
+                  <label className={labelBase}>{label} {req && <span className="text-red-500">*</span>}</label>
+                  {path === 'professional_info.designation' ? (
+                    <select className={inputBase} value={getByPath(profile, path) || ''} onChange={(e) => update(path, e.target.value)}>
+                      <option value="">Select</option>
+                      {DESIGNATIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  ) : path === 'professional_info.department' ? (
+                    <input className={inputBase} value={getByPath(profile, path) || ''} disabled onChange={() => {}} placeholder={placeholder} />
+                  ) : path === 'professional_info.employment_type' ? (
+                    <select className={inputBase} value={getByPath(profile, path) || ''} onChange={(e) => update(path, e.target.value)}>
+                      <option value="">Select</option>
+                      {EMPLOYMENT_TYPES.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : path === 'professional_info.present_grade' ? (
+                    <select className={inputBase} value={getByPath(profile, path) || ''} onChange={(e) => update(path, e.target.value)}>
+                      <option value="">Select</option>
+                      {PRESENT_GRADE_OPTIONS.map(g => <option key={g} value={String(g)}>{g}</option>)}
+                    </select>
+                  ) : (path === 'professional_info.date_of_joining' || path === 'professional_info.date_of_continuous_employment') ? (
+                    <input type="date" max={todayISO} min={
+                      path === 'professional_info.date_of_joining' && profile.basic_info?.date_of_birth 
+                        ? (() => { const d = new Date(profile.basic_info.date_of_birth); d.setFullYear(d.getFullYear() + 18); return !isNaN(d) ? d.toISOString().substring(0,10) : undefined; })() 
+                        : path === 'professional_info.date_of_continuous_employment' && profile.professional_info?.date_of_joining
+                        ? String(profile.professional_info.date_of_joining).substring(0,10)
+                        : undefined
+                    } className={`${inputBase} ${errors[path] ? 'border-red-500' : ''}`} value={(() => { const v = getByPath(profile, path); return v ? String(v).substring(0,10) : ''; })()} onChange={(e) => update(path, e.target.value)} />
+                  ) : (
+                    <input
+                      type={type||'text'}
+                      className={`${inputBase} ${errors[path] ? 'border-red-500' : ''}`}
+                      value={(() => { const v = getByPath(profile, path); if (!v && v !== 0) return ''; return type==='date' ? String(v).substring(0,10) : v; })()}
+                      disabled={path==='professional_info.faculty_staff_id'}
+                      placeholder={placeholder}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        let v = raw;
+                        if (path.endsWith('faculty_staff_id')) v = sanitizeAlphaNum(raw);
+                        else if (path.endsWith('designation')) v = sanitizeDesignation(raw);
+                        else if (path.endsWith('department')) v = sanitizeDepartment(raw);
+                        else if (path.endsWith('office_location')) v = sanitizeAlphaNumLoose(raw);
+                        else if (path.endsWith('office_contact_number')) v = sanitizePhone(raw);
+                        else if (path.endsWith('years_of_experience')) v = sanitizeNumeric(raw);
+                        update(path, type==='number' ? (v === '' ? null : Number(v)) : v);
+                      }}
+                    />
+                  )}
+                  {errors[path] && <div className={errorText}>{errors[path]}</div>}
+                </div>
+              ))}
+            </div>
+
+            {/* Specialization list */}
+            <div className="mt-4">
+              <label className={labelBase}>Specialization <span className="text-red-500">*</span></label>
+              <p className="text-xs text-gray-500 mb-2">At least one specialization is mandatory.</p>
+              <div className="flex gap-2 mb-2">
+                <input className={inputBase} placeholder="Add specialization" value={newSpec} onChange={(e) => setNewSpec(sanitizeSpecialization(e.target.value))} />
+                <button type="button" className="rounded-md bg-emerald-600 text-white px-3 py-2 text-sm font-semibold hover:bg-emerald-700" onClick={() => {
+                  const val = newSpec.trim();
+                  if (!val) return;
+                  setProfile(prev => {
+                    const list = Array.isArray(prev?.professional_info?.specialization) ? [...prev.professional_info.specialization] : [];
+                    if (list.includes(val)) return prev;
+                    const next = { ...prev };
+                    next.professional_info = next.professional_info || {};
+                    next.professional_info.specialization = [...list, val];
+                    return next;
+                  });
+                  setNewSpec('');
+                }}>Add</button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {(profile.professional_info?.specialization || []).map((s, idx) => (
+                  <span key={`${s}-${idx}`} className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-700 border border-emerald-200">
+                    {s}
+                    <button type="button" className="text-emerald-700 hover:text-emerald-900" onClick={() => {
+                      setProfile(prev => {
+                        const list = [...(prev.professional_info?.specialization || [])];
+                        list.splice(idx, 1);
+                        return setByPath(prev, 'professional_info.specialization', list);
+                      });
+                    }}>&times;</button>
+                  </span>
+                ))}
+              </div>
+              {errors['professional_info.specialization'] && <div className={errorText}>{errors['professional_info.specialization']}</div>}
+            </div>
+          </section>
+
+          <section ref={eduSectionRef} className="bg-white/80 backdrop-blur-md rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-white p-6 md:p-8 mb-8 relative overflow-hidden group">
+            <div className="absolute top-0 left-0 w-2 h-full bg-gradient-to-b from-amber-500 to-orange-500 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 border-b border-gray-100/50 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-amber-50 rounded-xl">
+                  <FiBookOpen className="w-5 h-5 text-amber-600" />
+                </div>
+                <h2 className="text-xl font-bold text-gray-900 tracking-tight">Educational Qualifications</h2>
+              </div>
+              {!showEduForm && (
+                <button type="button" onClick={handleAddQualification} className="rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white px-5 py-2 text-sm font-bold shadow-md hover:shadow-lg hover:scale-105 active:scale-95 transition-all">Add Qualification</button>
+              )}
+            </div>
+            
+            {educationError && (
+              <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {educationError}
+              </div>
+            )}
+
+            {/* Table View */}
+            {!showEduForm && Array.isArray(profile.educational_qualifications) && profile.educational_qualifications.length > 0 && (
+              <div className="overflow-hidden border border-gray-200/60 rounded-2xl mb-4 shadow-[0_4px_20px_rgb(0,0,0,0.02)]">
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200/60">
+                    <thead className="bg-gray-50/80 backdrop-blur-sm">
+                      <tr>
+                        <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Degree</th>
+                        <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Course</th>
+                        <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Institution</th>
+                        <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Duration</th>
+                        <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Score</th>
+                        <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Certificate</th>
+                        <th className="px-6 py-4 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white/40 divide-y divide-gray-100/80 backdrop-blur-sm">
+                      {profile.educational_qualifications.map((q, idx) => (
+                        <tr key={idx} className="hover:bg-gray-50/50 transition-colors">
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">{q.degree}{(q.degree === 'PhD' || q.degree === 'Post Doc') && q.status ? ` (${q.status})` : ''}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-600">{q.degree === 'Competitive Exams' ? (q.exam_name === 'Others' ? q.other_exam_name : q.exam_name) : q.course}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-600">{q.degree === 'Competitive Exams' ? q.conducting_org : q.institution_name}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-600">
+                            {q.degree === 'Competitive Exams' ? q.year_of_qualification : (
+                              <>
+                                {q.start_date ? String(q.start_date).substring(0,4) : ''} 
+                                {q.end_date ? ` - ${String(q.end_date).substring(0,4)}` : (q.status === 'Ongoing' ? ' - Present' : '')}
+                              </>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-600">{q.percentage_cgpa}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-blue-600">
+                            {q.certificate_url && typeof q.certificate_url === 'string' && (
+                              <a href={getDocumentUrl(q.certificate_url)} target="_blank" rel="noopener noreferrer">View</a>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                            <button type="button" onClick={() => handleEditQualification(idx)} className="text-indigo-600 hover:text-indigo-800 bg-indigo-50 px-3 py-1.5 rounded-lg mr-2 transition-colors">Edit</button>
+                            <button type="button" onClick={() => handleRemoveQualification(idx)} className="text-red-600 hover:text-red-800 bg-red-50 px-3 py-1.5 rounded-lg transition-colors">Remove</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {!showEduForm && (!profile.educational_qualifications || profile.educational_qualifications.length === 0) && (
+              <div className="text-center py-10 text-gray-500 bg-gray-50/50 border border-dashed border-gray-300 rounded-2xl">
+                No educational qualifications added yet.
+              </div>
+            )}
+
+            {/* Inline Add/Edit Form */}
+            {showEduForm && (
+              <div className="border border-indigo-100/60 bg-gradient-to-br from-indigo-50/50 to-white/50 backdrop-blur-md p-6 rounded-2xl mb-4 shadow-[0_4px_20px_rgb(0,0,0,0.03)] relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-1.5 h-full bg-indigo-500"></div>
+                <h3 className="text-lg font-bold text-gray-900 mb-5">{editEduIndex >= 0 ? 'Edit Qualification' : 'Add Qualification'}</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  <div key="degree">
+                    <label className={labelBase}>Degree <span className="text-red-500">*</span></label>
+                    <select
+                      className={`${inputBase} ${eduFormErrors.degree ? 'border-red-500 focus:border-red-500 focus:ring-red-500/20' : ''}`}
+                      value={eduForm.degree || ''}
+                      onChange={(e) => {
+                         setEduForm({...eduForm, degree: e.target.value});
+                         if (eduFormErrors.degree) setEduFormErrors({...eduFormErrors, degree: null});
+                      }}
+                    >
+                      <option value="">Select</option>
+                      {(eduForm.degree && !DEGREE_OPTIONS.includes(eduForm.degree)) ? (
+                        <option value={eduForm.degree}>{eduForm.degree}</option>
+                      ) : null}
+                      {DEGREE_OPTIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                    {eduFormErrors.degree && <div className={errorText}>{eduFormErrors.degree}</div>}
+                  </div>
+
+                  {eduForm.degree === 'Competitive Exams' ? (
+                    <>
+                      <div>
+                        <label className={labelBase}>Type of Exam <span className="text-red-500">*</span></label>
+                        <select className={`${inputBase} ${eduFormErrors.exam_name ? 'border-red-500 focus:border-red-500' : ''}`} value={eduForm.exam_name || ''} onChange={(e) => {
+                            setEduForm({...eduForm, exam_name: e.target.value});
+                            if (eduFormErrors.exam_name) setEduFormErrors({...eduFormErrors, exam_name: null});
+                        }}>
+                           <option value="">Select Exam</option>
+                           {['GATE', 'UGC NET', 'CSIR NET', 'ICAR NET', 'SLET', 'SET', 'JRF', 'GRE', 'TOEFL', 'IELTS', 'CAT', 'Others'].map(ex => <option key={ex} value={ex}>{ex}</option>)}
+                        </select>
+                        {eduFormErrors.exam_name && <div className={errorText}>{eduFormErrors.exam_name}</div>}
+                      </div>
+
+                      {eduForm.exam_name === 'Others' && (
+                        <div>
+                          <label className={labelBase}>Other Exam Name <span className="text-red-500">*</span></label>
+                          <input className={`${inputBase} ${eduFormErrors.other_exam_name ? 'border-red-500 focus:border-red-500' : ''}`} value={eduForm.other_exam_name || ''} placeholder="e.g. UPSC" onChange={(e) => {
+                              setEduForm({...eduForm, other_exam_name: e.target.value.replace(/[^A-Za-z0-9 .,-/]+/g, '').slice(0, 100)});
+                              if (eduFormErrors.other_exam_name) setEduFormErrors({...eduFormErrors, other_exam_name: null});
+                          }} />
+                          {eduFormErrors.other_exam_name && <div className={errorText}>{eduFormErrors.other_exam_name}</div>}
+                        </div>
+                      )}
+
+                      <div>
+                        <label className={labelBase}>Subject <span className="text-red-500">*</span></label>
+                        <input className={`${inputBase} ${eduFormErrors.exam_subject ? 'border-red-500 focus:border-red-500' : ''}`} value={eduForm.exam_subject || ''} placeholder="e.g. Computer Science" onChange={(e) => {
+                            setEduForm({...eduForm, exam_subject: e.target.value.replace(/[^A-Za-z0-9 .,-/]+/g, '').slice(0, 100)});
+                            if (eduFormErrors.exam_subject) setEduFormErrors({...eduFormErrors, exam_subject: null});
+                        }} />
+                        {eduFormErrors.exam_subject && <div className={errorText}>{eduFormErrors.exam_subject}</div>}
+                      </div>
+
+                      <div>
+                        <label className={labelBase}>Conducting Organization <span className="text-red-500">*</span></label>
+                        <input className={`${inputBase} ${eduFormErrors.conducting_org ? 'border-red-500 focus:border-red-500' : ''}`} value={eduForm.conducting_org || ''} placeholder="e.g. IIT Bombay" onChange={(e) => {
+                            setEduForm({...eduForm, conducting_org: e.target.value.replace(/[^A-Za-z0-9 .,-/]+/g, '').slice(0, 100)});
+                            if (eduFormErrors.conducting_org) setEduFormErrors({...eduFormErrors, conducting_org: null});
+                        }} />
+                        {eduFormErrors.conducting_org && <div className={errorText}>{eduFormErrors.conducting_org}</div>}
+                      </div>
+
+                      <div>
+                        <label className={labelBase}>Year of Qualification <span className="text-red-500">*</span></label>
+                        <input className={`${inputBase} ${eduFormErrors.year_of_qualification ? 'border-red-500 focus:border-red-500' : ''}`} value={eduForm.year_of_qualification || ''} placeholder="e.g. 2020" onChange={(e) => {
+                            const v = e.target.value.replace(/[^0-9]+/g, '');
+                            setEduForm({...eduForm, year_of_qualification: v === '' ? null : Number(v)});
+                            if (eduFormErrors.year_of_qualification) setEduFormErrors({...eduFormErrors, year_of_qualification: null});
+                        }} />
+                        {eduFormErrors.year_of_qualification && <div className={errorText}>{eduFormErrors.year_of_qualification}</div>}
+                      </div>
+                      
+                      <div>
+                        <label className={labelBase}>Score / Rank / Percentile <span className="text-red-500">*</span></label>
+                        <input className={`${inputBase} ${eduFormErrors.percentage_cgpa ? 'border-red-500 focus:border-red-500 focus:ring-red-500/20' : ''}`} value={eduForm.percentage_cgpa || ''} placeholder="e.g. AIR 120" onChange={(e) => {
+                          setEduForm({...eduForm, percentage_cgpa: e.target.value.replace(/[^A-Za-z0-9 .,-/]+/g, '').slice(0, 100)});
+                          if (eduFormErrors.percentage_cgpa) setEduFormErrors({...eduFormErrors, percentage_cgpa: null});
+                        }} />
+                        {eduFormErrors.percentage_cgpa && <div className={errorText}>{eduFormErrors.percentage_cgpa}</div>}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {[
+                        ['course','Course', 'e.g. B.Tech, M.Tech'],
+                        ['field_of_study','Field of Study', 'e.g. Computer Science'],
+                        ['institution_name','Institution Name', 'e.g. DTU'],
+                        ['university_board','University/Board', 'e.g. Delhi University']
+                      ].map(([k,label,placeholder]) => (
+                        <div key={k}>
+                          <label className={labelBase}>{label} <span className="text-red-500">*</span></label>
+                          <input className={`${inputBase} ${eduFormErrors[k] ? 'border-red-500 focus:border-red-500 focus:ring-red-500/20' : ''}`} value={eduForm[k] || ''} placeholder={placeholder} onChange={(e) => {
+                            let v = e.target.value;
+                            v = v.replace(/[^A-Za-z0-9 .,-/]+/g, '').slice(0, 200);
+                            setEduForm({...eduForm, [k]: v});
+                            if (eduFormErrors[k]) setEduFormErrors({...eduFormErrors, [k]: null});
+                          }} />
+                          {eduFormErrors[k] && <div className={errorText}>{eduFormErrors[k]}</div>}
+                        </div>
+                      ))}
+
+                      {(eduForm.degree === 'PhD' || eduForm.degree === 'Post Doc') && (
+                        <div>
+                          <label className={labelBase}>Status <span className="text-red-500">*</span></label>
+                          <select className={`${inputBase} ${eduFormErrors.status ? 'border-red-500 focus:border-red-500' : ''}`} value={eduForm.status || ''} onChange={(e) => {
+                              setEduForm({...eduForm, status: e.target.value});
+                              if (eduFormErrors.status) setEduFormErrors({...eduFormErrors, status: null});
+                          }}>
+                             <option value="">Select</option>
+                             <option value="Ongoing">Ongoing</option>
+                             <option value="Completed">Completed</option>
+                          </select>
+                          {eduFormErrors.status && <div className={errorText}>{eduFormErrors.status}</div>}
+                        </div>
+                      )}
+
+                      { (eduForm.degree && ( (eduForm.degree !== 'PhD' && eduForm.degree !== 'Post Doc') || ((eduForm.degree === 'PhD' || eduForm.degree === 'Post Doc') && eduForm.status) )) && (
+                        <div>
+                          <label className={labelBase}>Start Date <span className="text-red-500">*</span></label>
+                          <input type="date" className={`${inputBase} ${eduFormErrors.start_date ? 'border-red-500 focus:border-red-500' : ''}`} value={eduForm.start_date ? String(eduForm.start_date).substring(0,10) : ''} onChange={(e) => {
+                              setEduForm({...eduForm, start_date: e.target.value});
+                              if (eduFormErrors.start_date) setEduFormErrors({...eduFormErrors, start_date: null});
+                          }} />
+                          {eduFormErrors.start_date && <div className={errorText}>{eduFormErrors.start_date}</div>}
+                        </div>
+                      )}
+
+                      { (eduForm.degree && ( (eduForm.degree !== 'PhD' && eduForm.degree !== 'Post Doc') || ((eduForm.degree === 'PhD' || eduForm.degree === 'Post Doc') && eduForm.status === 'Completed') )) && (
+                        <div>
+                          <label className={labelBase}>End Date <span className="text-red-500">*</span></label>
+                          <input type="date" className={`${inputBase} ${eduFormErrors.end_date ? 'border-red-500 focus:border-red-500' : ''}`} value={eduForm.end_date ? String(eduForm.end_date).substring(0,10) : ''} onChange={(e) => {
+                              setEduForm({...eduForm, end_date: e.target.value});
+                              if (eduFormErrors.end_date) setEduFormErrors({...eduFormErrors, end_date: null});
+                          }} />
+                          {eduFormErrors.end_date && <div className={errorText}>{eduFormErrors.end_date}</div>}
+                        </div>
+                      )}
+
+                      { (!eduForm.degree || (eduForm.degree !== 'PhD' && eduForm.degree !== 'Post Doc') || ((eduForm.degree === 'PhD' || eduForm.degree === 'Post Doc') && eduForm.status !== 'Ongoing')) && (
+                        <div>
+                          <label className={labelBase}>Percentage/CGPA <span className="text-red-500">*</span></label>
+                          <input className={`${inputBase} ${eduFormErrors.percentage_cgpa ? 'border-red-500 focus:border-red-500 focus:ring-red-500/20' : ''}`} value={eduForm.percentage_cgpa || ''} placeholder="e.g. 85.5% or 8.5 CGPA" onChange={(e) => {
+                            let v = e.target.value;
+                            v = v.replace(/[^0-9.]+/g, '').slice(0, 6);
+                            setEduForm({...eduForm, percentage_cgpa: v});
+                            if (eduFormErrors.percentage_cgpa) setEduFormErrors({...eduFormErrors, percentage_cgpa: null});
+                          }} />
+                          {eduFormErrors.percentage_cgpa && <div className={errorText}>{eduFormErrors.percentage_cgpa}</div>}
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  <div className="sm:col-span-2">
+                    <label className={labelBase}>Certificate/Degree Upload {!(!eduForm.degree || (eduForm.degree === 'PhD' || eduForm.degree === 'Post Doc') && eduForm.status === 'Ongoing') && <span className="text-red-500">*</span>}</label>
+                    <div className={eduFormErrors.certificate_url ? 'border border-red-500 rounded-lg p-1' : ''}>
+                      <FileUpload value={eduForm.certificate_url} onChange={(val) => {
+                          setEduForm({...eduForm, certificate_url: val});
+                          if (eduFormErrors.certificate_url) setEduFormErrors({...eduFormErrors, certificate_url: null});
+                      }} temporaryPdf={true} />
+                    </div>
+                    {eduFormErrors.certificate_url && <div className={errorText}>{eduFormErrors.certificate_url}</div>}
+                  </div>
+                </div>
+                <div className="flex justify-end gap-3 mt-6 pt-5 border-t border-indigo-100/50">
+                  <button type="button" onClick={() => setShowEduForm(false)} className="px-5 py-2.5 text-sm font-bold text-gray-700 bg-white border border-gray-200/80 rounded-xl hover:bg-gray-50 hover:shadow-sm transition-all">Cancel</button>
+                  <button type="button" onClick={handleSaveEduForm} className="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 hover:shadow-md transition-all hover:-translate-y-0.5">Save to List</button>
+                </div>
+              </div>
+            )}
+          </section>
+
+          <section className="bg-white/80 backdrop-blur-md rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-white p-6 md:p-8 relative overflow-hidden group mb-8">
+            <div className="absolute top-0 left-0 w-2 h-full bg-gradient-to-b from-pink-500 to-rose-500 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+            <div className="flex items-center gap-3 mb-6 border-b border-gray-100/50 pb-4">
+              <div className="p-2.5 bg-pink-50 rounded-xl">
+                <FiLink className="w-5 h-5 text-pink-600" />
+              </div>
+              <h2 className="text-xl font-bold text-gray-900 tracking-tight">Social & Professional Links</h2>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              {[
+                ['social_links.google_scholar_profile','Google Scholar Profile', true, 'URL to Google Scholar'],
+                ['social_links.researchgate_profile','ResearchGate Profile', true, 'URL to ResearchGate'],
+                ['social_links.scopus_author_id','Scopus Author ID', true, 'e.g. 571934'],
+                ['social_links.orcid_id','ORCID ID', false, 'e.g. 0000-0000-0000-000X'],
+                ['social_links.vidwan_id','Vidwan ID', false, 'e.g. 123456']
+              ].map(([path,label,required,placeholder]) => (
+                <div key={path}>
+                  <label className={labelBase}>{label} {required && <span className="text-red-500">*</span>}</label>
+                  <input
+                    className={`${inputBase} ${errors[path] ? 'border-red-500' : ''}`}
+                    value={getByPath(profile, path) || ''}
+                    placeholder={placeholder}
+                    onChange={(e) => update(path, e.target.value.trim())}
+                    required={required}
+                  />
+                  {errors[path] && <div className={errorText}>{errors[path]}</div>}
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <div className="flex flex-col items-end gap-3 mt-8 pb-10">
+            {saveStatus === 'saved' && (
+              <span className="text-sm font-medium text-emerald-700 bg-emerald-50 px-4 py-2 rounded-xl flex items-center gap-2">
+                <FiCheckCircle /> Save successful
+              </span>
+            )}
+            <button type="button" onClick={handleSave} disabled={saving} className="rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 px-8 py-3.5 text-base font-bold text-white shadow-lg shadow-indigo-200 transition-all hover:shadow-xl hover:-translate-y-0.5 active:scale-95 disabled:opacity-60 disabled:pointer-events-none flex items-center gap-2">
+              {saving ? (
+                <><FiAlertCircle className="animate-pulse" /> Saving...</>
+              ) : 'Save Changes'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}

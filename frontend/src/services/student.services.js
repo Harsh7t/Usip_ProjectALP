@@ -1,0 +1,51 @@
+import {Api} from '../api/Api.js'
+
+class StudentServices{
+
+    constructor(){
+        this.api = new Api(import.meta.env.VITE_BASEURL)
+    }
+
+    async getStudentDetails(queryParams = {}){
+        try {
+            const query = new URLSearchParams(queryParams).toString();
+            const url = query ? `/students/get?${query}` : `/students/get`;
+            const response = await this.api.get(url)            
+            return response
+            
+        } catch (error) {
+            console.log("Error getting student details")
+            throw error
+        }
+    }
+
+    async createStudent(data){
+        try {
+            
+            const response = await this.api.post("/students/set", data)
+            return response
+
+        } catch (error) {
+            console.log("Error creating student")
+            throw error
+        }
+    }
+    
+
+    async updateStudent(id, data, headers = {}) {
+        const response = await this.api.put(`/students/update/${encodeURIComponent(id)}`, data, headers)
+        return response
+    }
+
+    async deleteStudent(id) {
+        const response = await this.api.delete(`/students/delete/${encodeURIComponent(id)}`)
+        return response
+    }
+
+    async getStudentById(id) {
+        const response = await this.api.get(`/students/get/${encodeURIComponent(id)}`)
+        return response
+    }
+}
+
+export const StudentService = new StudentServices();

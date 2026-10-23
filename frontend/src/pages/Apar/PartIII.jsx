@@ -1,0 +1,902 @@
+import React from 'react';
+import { useSelector } from 'react-redux';
+import { selectAparUser } from '../../store/slices/aparAuthSlice';
+import DynamicTableSection from '../../components/DynamicTableSection';
+import {
+    createAcademicYearSelectField,
+    getAcademicYearBounds,
+    getAcademicYearFromAparForm
+} from '../../utils/academicYear.util.js';
+
+export default function PartIII({ formData, academicYear, addItem, removeItem, updateArrayItem, updateField, readOnly, onSaveMonthly }) {
+    const user = useSelector(selectAparUser);
+    const currentFacultyId = user?.teacherId || user?.faculty_id || user?.userId || user?.user_id || '';
+    const resolvedAcademicYear = getAcademicYearFromAparForm(formData, academicYear);
+    const academicYearField = createAcademicYearSelectField(resolvedAcademicYear);
+    const academicYearBounds = getAcademicYearBounds(resolvedAcademicYear);
+    const academicCycleMonthYearBounds = {
+        min: academicYearBounds.startMonth,
+        max: academicYearBounds.endMonth
+    };
+
+    // Derive Course options from APAR draft (teaching.courses_taught)
+    const draftCourses = (formData?.teaching?.courses_taught || []).filter(Boolean);
+    // Build a map of { value: course_id (or name if no id), label: course_name }
+    const coursePairs = draftCourses
+        .map(c => {
+            const value = String((c?.course_code ?? c?.course_id ?? c?.name_of_course ?? '') || '').trim();
+            if (!value) return null;
+            const label = String((c?.name_of_course ?? c?.course_name ?? value) || '').trim();
+            return { value, label };
+        })
+        .filter(Boolean);
+    const courseMap = new Map();
+    coursePairs.forEach(({ value, label }) => { if (value && !courseMap.has(value)) courseMap.set(value, label); });
+    const courseOptionsFromDraft = Array.from(courseMap.entries()).map(([value, label]) => ({ value, label }));
+
+    // Helper handlers generator
+    const createHandlers = (field) => ({
+        onAdd: (item) => {
+            const newItem = { ...item };
+            if (field === 'projects' && newItem.type_of_project === 'Other' && newItem.type_of_project_other) {
+                newItem.type_of_project = newItem.type_of_project_other;
+            }
+            if ((field === 'journals' || field === 'books' || field === 'conferences') && newItem.indexing === 'Other' && newItem.indexing_other) {
+                newItem.indexing = newItem.indexing_other;
+            }
+            if (field === 'e_content') {
+                if (newItem.type_of_content === 'Other' && newItem.type_of_content_other) {
+                    newItem.type_of_content = newItem.type_of_content_other;
+                }
+                if (newItem.platform_type === 'Other' && newItem.platform_type_other) {
+                    newItem.platform_type = newItem.platform_type_other;
+                }
+            }
+            if (field === 'collaborations') {
+                if (newItem.start_date && newItem.end_date) {
+                    const start = new Date(newItem.start_date);
+                    const end = new Date(newItem.end_date);
+                    if (!isNaN(start) && !isNaN(end) && end >= start) {
+                        const diffDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+                        newItem.duration = `${diffDays} days`;
+                    }
+                }
+            }
+            if (field === 'mous') {
+                if (newItem.type_of_mou === 'Other' && newItem.type_of_mou_other) {
+                    newItem.type_of_mou = newItem.type_of_mou_other;
+                }
+            }
+            return addItem('research', field, newItem);
+        },
+        onUpdate: (index, newItem) => {
+            const updatedItem = { ...newItem };
+            if (field === 'projects' && updatedItem.type_of_project === 'Other' && updatedItem.type_of_project_other) {
+                updatedItem.type_of_project = updatedItem.type_of_project_other;
+            }
+            if ((field === 'journals' || field === 'books' || field === 'conferences') && updatedItem.indexing === 'Other' && updatedItem.indexing_other) {
+                updatedItem.indexing = updatedItem.indexing_other;
+            }
+            if (field === 'e_content') {
+                if (updatedItem.type_of_content === 'Other' && updatedItem.type_of_content_other) {
+                    updatedItem.type_of_content = updatedItem.type_of_content_other;
+                }
+                if (updatedItem.platform_type === 'Other' && updatedItem.platform_type_other) {
+                    updatedItem.platform_type = updatedItem.platform_type_other;
+                }
+            }
+            if (field === 'collaborations') {
+                if (updatedItem.start_date && updatedItem.end_date) {
+                    const start = new Date(updatedItem.start_date);
+                    const end = new Date(updatedItem.end_date);
+                    if (!isNaN(start) && !isNaN(end) && end >= start) {
+                        const diffDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+                        updatedItem.duration = `${diffDays} days`;
+                    }
+                }
+            }
+            if (field === 'mous') {
+                if (updatedItem.type_of_mou === 'Other' && updatedItem.type_of_mou_other) {
+                    updatedItem.type_of_mou = updatedItem.type_of_mou_other;
+                }
+            }
+            return updateArrayItem('research', field, index, updatedItem);
+        },
+        onRemove: removeItem ? (index) => removeItem('research', field, index) : undefined
+    });
+
+    return (
+        <div className="p-2 space-y-10">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-4">
+                <h3 className="text-xl font-bold text-gray-800 flex items-center">
+                    <span className="bg-indigo-100 text-indigo-700 p-2 rounded-lg mr-3">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"></path></svg>
+                    </span>
+                    Part III - RESEARCH & DEVELOPMENT
+                </h3>
+                {!readOnly && onSaveMonthly && (
+                    <button type="button" onClick={onSaveMonthly} className="px-4 py-1.5 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-md">
+                        Save as Monthly
+                    </button>
+                )}
+            </div>
+
+            {/* 1 a) Research Projects */}
+            <DynamicTableSection
+                title="1.1. DETAILS OF RESEARCH PROJECTS / FUNDING"
+                data={formData.research.projects}
+                uniqueKey="title_research"
+                {...createHandlers('projects')}
+                readOnly={readOnly}
+                initialItem={{
+                    department_id: '',
+                    title_research: '',
+                    status: '',
+                    role: '',
+                    type_of_project: '',
+                    funding_agency_name: '',
+                    funding_type: '',
+                    sanction_number: '',
+                    year_of_sanction: '',
+                    academic_year: resolvedAcademicYear,
+                    start_date: '',
+                    end_date: '',
+                    total_amount_sanctioned: '',
+                    total_amount_used_this_year: '',
+                    remarks: '',
+                    link: '',
+                    faculty_involved: [],
+                    students_involved: [],
+                    manpower_details: []
+                }}
+                fields={[
+                    { label: 'Research Title', key: 'title_research', fullWidth: true, required: true, placeholder: 'Enter research title' },
+                    { label: 'Status', key: 'status', type: 'select', options: ['Ongoing', 'Completed'], required: true, placeholder: 'Select status' },
+                    { label: 'Role', key: 'role', type: 'select', options: ['Principal Investigator', 'Co-Principal Investigator', 'Research Collaborator'] ,required: true, placeholder: 'Select Role'},
+                    { label: 'Project Type', key: 'type_of_project', type: 'select', options: ['Sponsored Research', 'Innovation', 'Startup', 'Other'], required: true, placeholder: 'Select type' },
+                    { label: 'Specify Project Type', key: 'type_of_project_other', showIf: (item) => item.type_of_project === 'Other', requiredIf: (item) => item.type_of_project === 'Other', placeholder: 'Enter custom project type' },
+                    { label: 'Funding Agency', key: 'funding_agency_name', required: true, placeholder: 'Enter funding agency' },
+                    { label: 'Funding Type', key: 'funding_type', type: 'select', options: ['Government', 'Non-Government', 'Industry'], required: true, placeholder: 'Select funding type' },
+                    { label: 'Sanction Number', key: 'sanction_number', required: true, placeholder: 'Enter sanction number' },
+                    {
+    label: 'Month-Year of Sanction',
+    key: 'year_of_sanction',
+    type: 'monthYear',
+    required: true,
+    min: academicYearBounds.startMonth,
+    max: academicYearBounds.endMonth,
+    placeholder: 'Select sanction month-year'
+},
+                    { ...academicYearField, hidden: true },
+                    {
+    label: 'Start Date',
+    key: 'start_date',
+    type: 'date',
+    required: true
+},
+                    {
+    label: 'End Date',
+    key: 'end_date',
+    type: 'date',
+    requiredIf: (item) => item?.status !== 'Ongoing',
+    minDateField: 'start_date',
+    validate: (value, formData) => {
+        if (!value || !formData.start_date) return true;
+        return new Date(value) >= new Date(formData.start_date);
+    },
+    validationMessage: 'End Date must be greater than or equal to Start Date'
+},
+                    
+                    { label: 'Total Amount Sanctioned', key: 'total_amount_sanctioned', type: 'number', min: 0, placeholder: 'Enter total amount sanctioned', required: true },
+                    { label: 'Total Amount Used in this Financial Year', key: 'total_amount_used_this_year', type: 'number', min: 0, placeholder: 'Enter total amount used', required: true },
+                    { label: 'Remarks', key: 'remarks', placeholder: 'Enter remarks' },
+                    { label: 'Proof of Sanction Letter', key: 'link', type: 'file', required: true },
+                    {
+                        label: 'Faculty Involved', key: 'faculty_involved', type: 'objectList', subFields: [
+                            { label: 'Faculty Name', key: 'faculty_name', required: true, placeholder: 'Enter name' },
+                            { label: 'Faculty Employee Code', key: 'faculty_emp_code', required: true, placeholder: 'Enter employ code' },
+                            { label: 'Designation', key: 'faculty_designation', placeholder: 'Enter designation' },
+                            { label: 'Role', key: 'role', type: 'select', options: ['Principal Investigator', 'Co-Principal Investigator', 'Research Collaborator'], required: true }
+                        ]
+                    },
+                    {
+                        label: 'Students Involved', key: 'students_involved', type: 'objectList', subFields: [
+                            { label: 'Student Name', key: 'name', required: true, placeholder: 'Enter student name' }, { label: 'Student Roll No', key: 'roll_no', required: true, placeholder: 'Enter roll no' },
+                            { label: 'Role', key: 'role', type: 'select', options: ['Research Assistant', 'Intern', 'Contributor', 'Other'], required: true },
+                            { label: 'Other Role', key: 'other_role', showIf: (item) => item.role === 'Other', requiredIf: (item) => item.role === 'Other', placeholder: 'Specify role' }
+                        ]
+                    },
+                    {
+                        label: 'Manpower Details', key: 'manpower_details', type: 'objectList', subFields: [
+                            { label: 'Name of Post', key: 'name_of_post', required: true, placeholder: 'Enter post name' },
+                            { label: 'Number of Posts', key: 'number_of_posts', type: 'number', min: 1, required: true, placeholder: 'Enter number' }
+                        ]
+                    }
+                ]}
+            />
+
+            {/* 1 b) Journals */}
+            <DynamicTableSection
+                title="1.2. RESEARCH PAPERS IN JOURNALS"
+                data={formData.research.journals}
+                uniqueKey="title"
+                {...createHandlers('journals')}
+                readOnly={readOnly}
+                initialItem={{ title: '', author_names: '', name_of_journal: '', publisher: '', other_publisher: '', volume: '', issue: '', issn: '', page_numbers: '', year_of_publication: '', indexing: '', impact_factor: '', doi: '', link_to_paper: '' }}
+                fields={[
+                    { label: 'Title', key: 'title', fullWidth: true, required: true, placeholder: 'Enter paper title' },
+                    { label: 'Authors', key: 'author_names', required: true, placeholder: 'Enter author names' },
+                    { label: 'Journal', key: 'name_of_journal', required: true, placeholder: 'Enter journal name' },
+                    { label: 'Publisher', key: 'publisher', type: 'select', options: ['Elsevier', 'Springer', 'Wiley', 'IEEE', 'Taylor & Francis', 'MDPI', 'Others'], required: true, placeholder: 'Select publisher' },
+                    { label: 'Other Publisher Name', key: 'other_publisher', requiredIf: (item) => item.publisher === 'Others', showIf: (item) => item.publisher === 'Others', placeholder: 'Enter publisher name' },
+                    { label: 'Volume', key: 'volume', type: 'number', min: 0, required: true, placeholder: 'Volume' },
+                    { label: 'Issue', key: 'issue', required: true, placeholder: 'Issue' },
+                    { label: 'ISSN', key: 'issn', required: true, placeholder: 'Enter ISSN' },
+                    { label: 'Pages', key: 'page_numbers',type: 'number', min: 0, required: true, placeholder: 'Page numbers' },
+                    { label: 'Month-Year', key: 'year_of_publication',type: 'monthYear', ...academicCycleMonthYearBounds, required: true, placeholder: 'e.g., 02-2026' },
+                    { label: 'Indexing', key: 'indexing', type: 'select', options: ['SCI', 'SCIE', 'Scopus', 'Web of Science', 'PubMed', 'UGC Care', 'Google Scholar', 'Other'], required: true, placeholder: 'Select Indexing' },
+                    { label: 'Specify Indexing', key: 'indexing_other', showIf: (item) => item.indexing === 'Other', requiredIf: (item) => item.indexing === 'Other', placeholder: 'Enter custom indexing' },
+                    { label: 'Impact Factor', key: 'impact_factor', type: 'number', min: 0, required: true, placeholder: 'IF' },
+                    { label: 'DOI', key: 'doi', required: true, placeholder: 'DOI' },
+                    { label: 'First Page of Published Paper', key: 'link_to_paper', type: 'file', required: true },
+                    { label: 'Co-Author', key: 'faculty_members', type: 'objectList', subFields: [
+                        { label: 'Author Type', key: 'author_type', type: 'select', options: ['Internal Author', 'External Author'], required: true, placeholder: 'Select type' },
+                        { label: 'Co-Author Name', key: 'name', required: true, placeholder: 'Enter name' },
+                        { label: 'Employee Code', key: 'emp_code', showIf: (item) => item.author_type === 'Internal Author', requiredIf: (item) => item.author_type === 'Internal Author', placeholder: 'Enter employee code' }
+                    ] },
+                    { label: 'Students', key: 'students', type: 'objectList', subFields: [
+                        { label: 'Student Type', key: 'student_type', type: 'select', options: ['Internal', 'External'], required: true, placeholder: 'Select type' },
+                        { label: 'Student Name', key: 'name', required: true, placeholder: 'Enter student name' },
+                        { label: 'Student Roll No', key: 'roll_no', showIf: (item) => item.student_type === 'Internal', requiredIf: (item) => item.student_type === 'Internal', placeholder: 'Enter roll no' }
+                    ] }
+                ]}
+            />
+
+            {/* 1 c) Books */}
+            < DynamicTableSection
+                title="1.3. BOOKS / CHAPTERS IN EDITED VOLUMES"
+                data={formData.research.books}
+                uniqueKey="title_of_book"
+                {...createHandlers('books')}
+                readOnly={readOnly}
+                initialItem={{
+                    department_id: '',
+                    publication_type: '',
+                    title_of_book: '',
+                    title_of_chapter: '',
+                    role: '',
+                    year: '',
+                    isbn_number: '',
+                    name_of_publisher: '',
+                    publisher_type: '',
+                    doi: '',
+                    indexing: '',
+                    link_to_publication: '',
+                    link: ''
+                }}
+                fields={[
+                    { label: 'Publication Type', key: 'publication_type', type: 'select', options: ['Book', 'Chapter'], required: true, placeholder: 'Select type' },
+                    { label: 'Title of Book', key: 'title_of_book', required: true, placeholder: 'Enter book title' },
+                    { label: 'Title of Chapter', key: 'title_of_chapter', required: true, placeholder: 'Enter chapter title' },
+                    { label: 'Role', key: 'role', type: 'select', options: ['Author', 'Co-Author', 'Editor'], required: true, placeholder: 'Select role' },
+                    { label: 'Month-Year', key: 'year', type: 'monthYear', ...academicCycleMonthYearBounds, required: true, placeholder: 'e.g., 02-2026' },
+                    { label: 'ISBN', key: 'isbn_number', required: true, placeholder: 'ISBN' },
+                    { label: 'Publisher', key: 'name_of_publisher', required: true, placeholder: 'Enter publisher' },
+                    { label: 'Publisher Type', key: 'publisher_type', type: 'select', options: ['National', 'International'], required: true, placeholder: 'Select type' },
+                    { label: 'DOI', key: 'doi', required: true, placeholder: 'DOI' },
+                    { label: 'Indexing', key: 'indexing', type: 'select', options: ['SCI', 'SCIE', 'Scopus', 'Web of Science', 'PubMed', 'UGC Care', 'Google Scholar', 'Other'], required: true, placeholder: 'Select Indexing' },
+                    { label: 'Specify Indexing', key: 'indexing_other', showIf: (item) => item.indexing === 'Other', requiredIf: (item) => item.indexing === 'Other', placeholder: 'Enter custom indexing' },
+                    { label: 'upload proof file', key: 'link_to_publication', type: 'file', required: true },
+                    { label: 'Co-Author', key: 'faculty_members', type: 'objectList', subFields: [
+                        { label: 'Author Type', key: 'author_type', type: 'select', options: ['Internal Author', 'External Author'], required: true, placeholder: 'Select type' },
+                        { label: 'Co-Author Name', key: 'name', required: true, placeholder: 'Enter name' },
+                        { label: 'Employee Code', key: 'emp_code', showIf: (item) => item.author_type === 'Internal Author', requiredIf: (item) => item.author_type === 'Internal Author', placeholder: 'Enter employee code' }
+                    ] },
+                    { label: 'Students', key: 'students', type: 'objectList', subFields: [{ label: 'Student Name', key: 'name', required: true, placeholder: 'Enter student name' }, { label: 'Student Roll No', key: 'roll_no', required: true, placeholder: 'Enter roll no' }] },
+                    {
+                        label: 'External Contributors', key: 'external_contributors', type: 'objectList', subFields: [
+                            { label: 'Name', key: 'name',required: true }, { label: 'Role', key: 'role',required: true }, { label: 'Affiliation', key: 'affiliation' }
+                        ]
+                    }
+                ]}
+            />
+
+            {/* 2) Conferences */}
+            < DynamicTableSection
+                title="2. PARTICIPATION IN CONFERENCES / SEMINARS (PAPER PRESENTATION)"
+                data={formData.research.conferences || []}
+                uniqueKey="title"
+                {...createHandlers('conferences')}
+                readOnly={readOnly}
+                initialItem={{
+                    department_id: '',
+                    title: '',
+                    name_of_conference: '',
+                    conference_level: '',
+                    organizer: '',
+                    venue: '',
+                    publisher: '',
+                    other_publisher: '',
+                    issn: '',
+                    isbn: '',
+                    volume: '',
+                    year_of_publication: '',
+                    doi: '',
+                    indexing: '',
+                    award_received: '',
+                    link_to_paper: ''
+                }}
+                fields={[
+
+
+                    { label: 'Title', key: 'title', fullWidth: true, required: true, placeholder: 'Enter title' },
+                    { label: 'Conference', key: 'name_of_conference', required: true, placeholder: 'Enter conference name' },
+                    { label: 'Level', key: 'conference_level', type: 'select', options: ['National', 'International'], required: true, placeholder: 'Select level' },
+                    { label: 'Organizer', key: 'organizer', required: true, placeholder: 'Enter organizer' },
+                    { label: 'Venue', key: 'venue', required: true, placeholder: 'Enter venue' },
+                    { label: 'Publisher', key: 'publisher', type: 'select', options: ['Elsevier', 'Springer', 'Wiley', 'IEEE', 'Taylor & Francis', 'MDPI', 'Others'], required: true, placeholder: 'Select publisher' },
+                    { label: 'Other Publisher Name', key: 'other_publisher', requiredIf: (item) => item.publisher === 'Others', showIf: (item) => item.publisher === 'Others', placeholder: 'Enter publisher name' },
+                    { label: 'ISSN', key: 'issn', required: true, placeholder: 'ISSN' },
+                    { label: 'ISBN', key: 'isbn', required: true, placeholder: 'ISBN' },
+                    { label: 'Volume', key: 'volume', required: true, placeholder: 'Volume' },
+                    { label: 'Month-Year', key: 'year_of_publication', type: 'monthYear', ...academicCycleMonthYearBounds, required: true, placeholder: 'e.g., 02-2026' },
+                    { label: 'DOI', key: 'doi', required: true, placeholder: 'DOI' },
+                    { label: 'Indexing', key: 'indexing', type: 'select', options: ['Core A star', 'Core A', 'Core B', 'Core C', 'Peer Review', 'Scopus'], required: true, placeholder: 'Select Indexing' },
+                    { label: 'Award Received', key: 'award_received', placeholder: 'Award details' },
+                    { label: 'Upload the proof file', key: 'link_to_paper', type: 'file', required: true },
+                    { label: 'Faculty Members', key: 'faculty_members', type: 'objectList', subFields: [
+                        { label: 'Author Type', key: 'author_type', type: 'select', options: ['Internal Author', 'External Author'], required: true, placeholder: 'Select type' },
+                        { label: 'Faculty Name', key: 'name', required: true, placeholder: 'Enter name' },
+                        { label: 'Employee Code', key: 'emp_code', showIf: (item) => item.author_type === 'Internal Author', requiredIf: (item) => item.author_type === 'Internal Author', placeholder: 'Enter employee code' }
+                    ] },
+                    { label: 'Students', key: 'students', type: 'objectList', subFields: [{ label: 'Student Name', key: 'name', required: true, placeholder: 'Enter student name' }, { label: 'Student Roll No', key: 'roll_no', required: true, placeholder: 'Enter roll no' }] },
+                    {
+                        label: 'External Contributors', key: 'external_contributors', type: 'objectList', subFields: [
+                            { label: 'Name', key: 'name',required: true }, { label: 'Role', key: 'role',required: true }, { label: 'Affiliation', key: 'affiliation'}
+                        ]
+                    }
+                ]}
+            />
+
+            {/* PhD Supervision */}
+            <div className="pt-6 border-t border-gray-100 space-y-8">
+                <div>
+                    <div className="flex items-center space-x-4 mb-4">
+                        <label className="text-md font-semibold text-gray-800">Are you an Eligible Supervisor?</label>
+                        <select
+                            className="p-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                            value={formData.research?.is_eligible_supervisor || 'Yes'}
+                            onChange={(e) => updateField('research', 'is_eligible_supervisor', e.target.value)}
+                            disabled={readOnly}
+                        >
+                            <option value="Yes">Yes</option>
+                            <option value="No">No</option>
+                        </select>
+                    </div>
+
+                    {formData.research?.is_eligible_supervisor !== 'No' && (
+                        <DynamicTableSection
+                            title="3. DETAILS OF PHD SUPERVISION"
+                data={formData.research.phd_supervision || []}
+                uniqueKey="thesis_title"
+                {...createHandlers('phd_supervision')}
+                readOnly={readOnly}
+                initialItem={{
+                    department_id: '',
+                    supervisor_id: currentFacultyId,
+                    supervisor_name: user?.name || '',
+                    supervision_location: '',
+                    student_name: '',
+                    enrollment_no: '',
+                    thesis_title: '',
+                    thesis_type: '',
+                    supervisor_role: '',
+                    status: '',
+                    date_of_registration: '',
+                    academic_year: resolvedAcademicYear,
+                    date_of_defence: '',
+                    date_of_result_notification: '',
+                    remarks: '',
+                    link: ''
+                }}
+                fields={[
+
+
+                    { label: 'Supervisor ID', key: 'supervisor_id', type: 'entitySelect', entityType: 'faculty', required: true, defaultValue: currentFacultyId, disabled: true, hidden: true, hideInTable: true },
+                    { label: 'Supervisor Name', key: 'supervisor_name', required: true, disabled: true, defaultValue: user?.name || '', placeholder: 'Enter supervisor name' },
+                    { label: 'Student Name', key: 'student_name', required: true, placeholder: 'Enter student name' },
+                    { label: 'Student Roll/Enrollment No', key: 'enrollment_no', required: true, placeholder: 'Enter enrollment no' },
+                    { label: 'PhD Status', key: 'status', type: 'select', options: ['Ongoing', 'Submitted', 'Awarded'], required: true, placeholder: 'Select status' },
+                    { label: 'Student Thesis Title', key: 'thesis_title', requiredIf: (item) => item?.status !== 'Ongoing', placeholder: 'Enter thesis title' },
+                    { label: 'Student Thesis Type', key: 'thesis_type', type: 'select', options: ['Full-time', 'Part-time', 'Sponsored', 'Industry-linked', 'Full time with fellowship', 'Without', 'NetJRF', 'Industry Work Professional (IWP)', 'Other'], required: true, placeholder: 'Select type' },
+                    { label: 'Type of Supervision', key: 'supervision_location', type: 'select', options: ['Internal (Within University)', 'External (Outside University)'], required: true, placeholder: 'Select type' },
+                    { label: 'Supervisor Role', key: 'supervisor_role', type: 'select', options: ['Main', 'Joint'], required: true, placeholder: 'Select role' },
+                    { label: 'Student Date of Registration', key: 'date_of_registration', type: 'date', required: true },
+                    { ...academicYearField, hidden: true },
+                    { label: 'Student Viva Voce Date', key: 'date_of_defence', type: 'date', requiredIf: (item) => item?.status !== 'Ongoing', disabled: (item) => item?.status === 'Ongoing' },
+                    { label: 'Result Notification Date', key: 'date_of_result_notification', type: 'date', requiredIf: (item) => item?.status !== 'Ongoing', disabled: (item) => item?.status === 'Ongoing' },
+                    { label: 'Remarks', key: 'remarks', placeholder: 'Remarks' },
+                    { label: 'Upload Result Notified for Viva Voce', key: 'link', type: 'file', requiredIf: (item) => item?.status !== 'Ongoing' },
+                    {
+                        label: 'Co-Supervisors', key: 'co_supervisors', type: 'objectList', subFields: [
+                            { label: 'Supervisor Type', key: 'supervisor_type', type: 'select', options: ['Internal', 'External'], required: true, placeholder: 'Select type' },
+                            { label: 'Faculty Name', key: 'name', required: true, placeholder: 'Enter name' },
+                            { label: 'Emp Code', key: 'emp_code', showIf: (item) => item.supervisor_type === 'Internal', requiredIf: (item) => item.supervisor_type === 'Internal', placeholder: 'Enter emp code' },
+                            { label: 'Role', key: 'role', type: 'select', options: ['Co-Supervisor 1', 'Co-Supervisor 2', 'Main', 'Other'], required: true }
+                        ]
+                    }
+                ]}
+            />
+                    )}
+                </div>
+            </div>
+
+            {/* Awards */}
+            < DynamicTableSection
+                title="4. AWARDS & RECOGNITIONS"
+                data={formData.research.awards || []}
+                uniqueKey="name_of_award"
+                {...createHandlers('awards')}
+                readOnly={readOnly}
+                initialItem={{ name_of_award: '', agency_type: '', category_of_award: '', date_of_award: '', evidence_link: '' }}
+                fields={[
+
+                    { label: 'Award Name', key: 'name_of_award', required: true, placeholder: 'Enter award name' },
+                    { label: 'Sponsoring agency Type', key: 'agency_type', type: 'select', options: ['DTU', 'Other'], required: true, placeholder: 'Select agency type' },
+                    { label: 'Organization', key: 'name_of_organisation', requiredIf: (item) => item?.agency_type === 'Other', placeholder: 'Enter organization' },
+                    { label: 'Category', key: 'category_of_award', placeholder: 'Enter category' },
+                    { label: 'Type', key: 'type_of_award', type: 'select', options: ['International', 'National', 'State', 'University'], required: true, placeholder: 'Select type' },
+                    { label: 'Month-Year', key: 'year', type: 'monthYear', ...academicCycleMonthYearBounds, required: true, placeholder: 'MM-YYYY' },
+                    { label: 'Reward amount', key: 'monetary_value',  type: 'number', min: 0, placeholder: 'Enter amount' },
+                    { label: 'Date', key: 'date_of_award', type: 'date', required: true },
+                    { label: 'Award Letter', key: 'evidence_link', type: 'file', required: true }
+                ]}
+            />
+
+            {/* E-Content */}
+            < DynamicTableSection
+                title="5. E-CONTENT DEVELOPED"
+                data={formData.research.e_content || []}
+                uniqueKey="name_of_module"
+                {...createHandlers('e_content')}
+                readOnly={readOnly}
+                initialItem={{
+                    department_id: '',
+                    faculty_id: currentFacultyId,
+                    course_name: '',
+                    course_code: '',
+                    name_of_module: '',
+                    type_of_content: '',
+                    platform: '',
+                    platform_type: '',
+                    target_audience: '',
+                    academic_year: resolvedAcademicYear,
+                    date_of_launching: '',
+                    duration_hours: '',
+                    remarks: '',
+                    link: ''
+                }}
+                fields={[
+                    { label: 'Faculty ID', key: 'faculty_id', type: 'entitySelect', entityType: 'faculty', required: true, defaultValue: currentFacultyId, disabled: true, hidden: true, hideInTable: true },
+                    { label: 'Course Name', key: 'course_name', required: true, placeholder: 'Enter course name' },
+                    { label: 'Course Code', key: 'course_code', required: true, placeholder: 'Enter course code' },
+                    { label: 'Module Name', key: 'name_of_module', required: true, placeholder: 'Enter module name' },
+                    { label: 'Type', key: 'type_of_content', type: 'select', options: ['Video', 'Module', 'Quiz', 'PPT', 'Simulation', 'eBook', 'Other'], required: true, placeholder: 'Select type' },
+                    { label: 'Specify Type', key: 'type_of_content_other', showIf: (item) => item?.type_of_content === 'Other', requiredIf: (item) => item?.type_of_content === 'Other', placeholder: 'Enter custom type' },
+                    { label: 'Platform', key: 'platform', required: true, placeholder: 'Enter platform' },
+                    { label: 'Platform Type', key: 'platform_type', type: 'select', options: ['LMS', 'MOOC', 'YouTube', 'SWAYAM', 'Internal', 'Other'], required: true, placeholder: 'Select platform type' },
+                    { label: 'Specify Platform Type', key: 'platform_type_other', showIf: (item) => item?.platform_type === 'Other', requiredIf: (item) => item?.platform_type === 'Other', placeholder: 'Enter custom platform type' },
+                    { label: 'Target Audience', key: 'target_audience', type: 'select', options: ['UG', 'PG', 'PhD', 'Faculty', 'Students', 'Mixed'], required: true, placeholder: 'Select audience' },
+                    { ...academicYearField, hidden: true },
+                    { label: 'Launch Date', key: 'date_of_launching', type: 'date', required: true },
+                    { label: 'Duration (Hours)', key: 'duration_hours', type: 'number', min: 0, required: true, placeholder: 'Hours' },
+                    { label: 'Remarks', key: 'remarks', placeholder: 'Remarks' },
+                    { label: 'Upload invitation letter/certificate proof', key: 'link', type: 'file' }
+                ]}
+            />
+
+            {/* Collaborations */}
+            < DynamicTableSection
+                title="6.1. COLLABORATIONS"
+                data={formData.research.collaborations || []}
+                uniqueKey="title_of_activity"
+                {...createHandlers('collaborations')}
+                readOnly={readOnly}
+                initialItem={{
+                    department_id: '',
+                    title_of_activity: '',
+                    type_of_activity: '',
+                    name_of_collaborative_agency: '',
+                    level: '',
+                    nature_of_collaboration: '',
+                    number_of_participants: '',
+                    funding_amount: '',
+                    source_of_financial_support: '',
+                    duration: '',
+                    year: '',
+                    academic_year: resolvedAcademicYear,
+                    start_date: '',
+                    end_date: '',
+                    outcome: '',
+                    remarks: '',
+                    link: ''
+                }}
+                fields={[
+
+
+                    { label: 'Activity Title', key: 'title_of_activity', required: true, placeholder: 'Enter title' },
+                    { label: 'Type', key: 'type_of_activity', type: 'select', options: ['Workshop', 'Seminar', 'Industrial Visit', 'Research Collaboration', 'Joint Program', 'Other'], required: true, placeholder: 'Select type' },
+                    { label: 'Other Type', key: 'other_type_of_activity', requiredIf: (item) => item.type_of_activity === 'Other', showIf: (item) => item.type_of_activity === 'Other', placeholder: 'Enter type' },
+                    { label: 'Agency', key: 'name_of_collaborative_agency', required: true, placeholder: 'Enter agency' },
+                    { label: 'Level', key: 'level', type: 'select', options: ['Institutional', 'National', 'International'], required: true, placeholder: 'Select level' },
+                    { label: 'Nature', key: 'nature_of_collaboration', required: true, placeholder: 'Describe nature' },
+                    { label: 'Participants', key: 'number_of_participants', type: 'number', min: 0, placeholder: 'Count' },
+                    { label: 'Funding amount', key: 'funding_amount', type: 'number', min: 0, placeholder: 'Amount' },
+                    { label: 'Funding Source', key: 'source_of_financial_support', placeholder: 'Source' },
+                    { label: 'End Month-Year', key: 'year', type: 'monthYear', ...academicCycleMonthYearBounds, required: true, placeholder: 'MM-YYYY' },
+                    { ...academicYearField, hidden: true, hideInTable: true },
+                    { label: 'Start Date', key: 'start_date', type: 'date', required: true },
+                    { label: 'End Date', key: 'end_date', type: 'date', required: true },
+                    { label: 'Duration', key: 'duration', disabled: true, placeholder: 'Auto-calculated on save' },
+                    { label: 'Remarks', key: 'remarks', placeholder: 'Remarks' },
+                    { label: 'MoU/Letter Proof', key: 'link', type: 'file' },
+                    {
+                        label: 'Faculty Involved', key: 'faculty_associations', type: 'objectList', subFields: [
+                            { label: 'Author Type', key: 'author_type', type: 'select', options: ['Internal Author', 'External Author'], required: true, placeholder: 'Select type' },
+                            { label: 'Faculty Name', key: 'name', required: true, placeholder: 'Enter name' },
+                            { label: 'Employee Code', key: 'emp_code', showIf: (item) => item.author_type === 'Internal Author', requiredIf: (item) => item.author_type === 'Internal Author', placeholder: 'Enter employee code' }
+                        ]
+                    },
+                    {
+                        label: 'Students Involved', key: 'student_associations', type: 'objectList', subFields: [
+                            { label: 'Student Name', key: 'name', required: true, placeholder: 'Enter student name' }, { label: 'Student Roll No', key: 'roll_no', required: true, placeholder: 'Enter roll no' },
+                            { label: 'Role', key: 'role', required: true }
+                        ]
+                    },
+                    {
+                        label: 'External Collaborators', key: 'external_contributors', type: 'objectList', subFields: [
+                            { label: 'Name', key: 'name', required: true }, { label: 'Role', key: 'role', required: true }, { label: 'Affiliation', key: 'affiliation' }
+                        ]
+                    }
+                ]}
+            />
+
+            {/* MoUs */}
+            < DynamicTableSection
+                title="6.2. MOUS"
+                data={formData.research.mous || []}
+                uniqueKey="title"
+                {...createHandlers('mous')}
+                readOnly={readOnly}
+                initialItem={{
+                    department_id: '',
+                    organisation_name: '',
+                    title: '',
+                    type_of_mou: '',
+                    year_of_signing: '',
+                    purpose: '',
+                    activities_under_mou: '',
+                    status: '',
+                    start_date: '',
+                    end_date: '',
+                    level: '',
+                    link: '',
+                    academic_year: resolvedAcademicYear
+                }}
+                fields={[
+                    { label: 'Organization Name', key: 'organisation_name', required: true, placeholder: 'Enter organization' },
+                    { label: 'Title', key: 'title', required: true, placeholder: 'Enter title' },
+                    { label: 'Type of MoU', key: 'type_of_mou', type: 'select', options: ['Academic', 'Research', 'Industrial', 'Other'], required: true, placeholder: 'Select type' },
+                    { label: 'Specify Type of MoU', key: 'type_of_mou_other', showIf: (item) => item?.type_of_mou === 'Other', requiredIf: (item) => item?.type_of_mou === 'Other', placeholder: 'Enter custom type' },
+                    { label: 'Month-Year of Signing', key: 'year_of_signing', type: 'monthYear', ...academicCycleMonthYearBounds, required: true, placeholder: 'MM-YYYY' },
+                    { label: 'Purpose', key: 'purpose', required: true, placeholder: 'Enter purpose' },
+                    { label: 'Activities under MoU', key: 'activities_under_mou', required: true, placeholder: 'Enter activities' },
+                    { label: 'Level', key: 'level', type: 'select', options: ['Institutional', 'National', 'International'], required: true, placeholder: 'Select level' },
+                    { label: 'Status', key: 'status', type: 'select', options: ['Ongoing', 'Completed'], required: true, placeholder: 'Select status' },
+                    { ...academicYearField, hidden: true, hideInTable: true },
+                    { label: 'Start Date', key: 'start_date', type: 'date', required: true },
+                    { label: 'End Date', key: 'end_date', type: 'date', requiredIf: (item) => item?.status !== 'Ongoing' },
+                    { label: 'MOU copy pdf', key: 'link', type: 'file', required: true },
+                    {
+                        label: 'Faculty Involved', key: 'faculty_associations', type: 'objectList', subFields: [
+                            { label: 'Author Type', key: 'author_type', type: 'select', options: ['Internal Author', 'External Author'], required: true, placeholder: 'Select type' },
+                            { label: 'Faculty Name', key: 'name', required: true, placeholder: 'Enter name' },
+                            { label: 'Employee Code', key: 'emp_code', showIf: (item) => item.author_type === 'Internal Author', requiredIf: (item) => item.author_type === 'Internal Author', placeholder: 'Enter employee code' }
+                        ]
+                    },
+                    {
+                        label: 'Students Involved', key: 'student_associations', type: 'objectList', subFields: [
+                            { label: 'Student Name', key: 'name', required: true, placeholder: 'Enter student name' }, { label: 'Student Roll No', key: 'roll_no', required: true, placeholder: 'Enter roll no' },
+                            { label: 'Role', key: 'role', required: true }
+                        ]
+                    },
+                    {
+                        label: 'External Collaborators', key: 'external_contributors', type: 'objectList', subFields: [
+                            { label: 'Name', key: 'name', required: true }, { label: 'Role', key: 'role', required: true }, { label: 'Affiliation', key: 'affiliation' }
+                        ]
+                    }
+                ]}
+            />
+
+            {/* Faculty Visits */}
+            < DynamicTableSection
+                title="7. FACULTY VISITS / EXPERT LECTURES"
+                data={formData.research.faculty_visits || []}
+                uniqueKey="title"
+                {...createHandlers('faculty_visits')}
+                readOnly={readOnly}
+                initialItem={{ organisation_name: '', title: '', link: '' }}
+                fields={[
+
+                    { label: 'Organization', key: 'organisation_name', required: true, placeholder: 'Enter organization' },
+                    { label: 'Title/Context', key: 'title', required: true, placeholder: 'Enter title' },
+                    { label: 'Location', key: 'location', required: true, placeholder: 'Location' },
+                    { label: 'Start Date', key: 'start_date', type: 'date', required: true },
+                    { label: 'End Date', key: 'end_date', type: 'date', required: true },
+                    { label: 'Document proof upload', key: 'link', type: 'file' },
+                    {
+                        label: 'Faculty Involved', key: 'faculty_ids', type: 'objectList', subFields: [
+                            { label: 'Author Type', key: 'author_type', type: 'select', options: ['Internal Author', 'External Author'], required: true, placeholder: 'Select type' },
+                            { label: 'Faculty Name', key: 'name', required: true, placeholder: 'Enter name' },
+                            { label: 'Employee Code', key: 'emp_code', showIf: (item) => item.author_type === 'Internal Author', requiredIf: (item) => item.author_type === 'Internal Author', placeholder: 'Enter employee code' }
+                        ]
+                    },
+                    {
+                        label: 'Students Involved', key: 'student_ids', type: 'objectList', subFields: [
+                            { label: 'Student Name', key: 'name', required: true, placeholder: 'Enter student name' }, { label: 'Student Roll No', key: 'roll_no', required: true, placeholder: 'Enter roll no' },
+                            { label: 'Role', key: 'role', required: true }
+                        ]
+                    },
+                    {
+                        label: 'External Collaborators', key: 'external_contributors', type: 'objectList', subFields: [
+                            { label: 'Name', key: 'name', required: true }, { label: 'Role', key: 'role', required: true }, { label: 'Affiliation', key: 'affiliation' }
+                        ]
+                    }
+                ]}
+            />
+
+            {/* FDPs / Events */}
+            < DynamicTableSection
+                title="8. FDPS / WORKSHOPS / SEMINARS"
+                data={formData.research.fdps || []}
+                uniqueKey="program_title"
+                {...createHandlers('fdps')}
+                readOnly={readOnly}
+                initialItem={{
+                    department_id: '',
+                    program_title: '',
+                    type_of_program: '',
+                    level: '',
+                    participation_level: '',
+                    amount_for_funding: '',
+                    mode: '',
+                    organising_body: '',
+                    venue: '',
+                    duration_days: '',
+                    academic_year: resolvedAcademicYear,
+                    funding_agency: '',
+                    start_date: '',
+                    end_date: '',
+                    outcome: '',
+                    remarks: '',
+                    certificate_link: '',
+                    link: ''
+                }}
+                fields={[
+
+
+                    { label: 'Program Title', key: 'program_title', required: true, placeholder: 'Enter title' },
+                    { label: 'Type', key: 'type_of_program', type: 'select', options: ['FDP', 'Workshop', 'Seminar', 'STTP', 'Training', 'Orientation', 'Other'], required: true, placeholder: 'Select type' },
+                    { label: 'Specify Other Type', key: 'type_of_program_other', showIf: (item) => item.type_of_program === 'Other', requiredIf: (item) => item.type_of_program === 'Other', placeholder: 'Enter type', hideInTable: true },
+                    { label: 'Level', key: 'level', type: 'select', options: ['Institutional', 'National', 'International'], required: true, placeholder: 'Select level' },
+                    { label: 'Participation Level', key: 'participation_level', type: 'select', options: ['Attended', 'Organized'], placeholder: 'Select Attended/Organized' },
+                    { label: 'Amount for Funding (INR)', key: 'amount_for_funding', type: 'number', min: 0, requiredIf: (item) => item?.participation_level !== 'Attended', disabled: (item) => item?.participation_level === 'Attended', placeholder: 'Enter amount' },
+                    { label: 'Mode', key: 'mode', type: 'select', options: ['Online', 'Offline', 'Hybrid'], required: true, placeholder: 'Select mode' },
+                    { label: 'Organizer', key: 'organising_body', required: true, placeholder: 'Enter organizer' },
+                    { label: 'Venue', key: 'venue', required: true, placeholder: 'Venue' },
+                    { label: 'Duration (Days)', key: 'duration_days', type: 'number', min: 0, required: true, placeholder: 'No. of days' },
+                    { ...academicYearField, hidden: true, hideInTable: true },
+                    { label: 'Funding Agency', key: 'funding_agency', disabled: (item) => item?.participation_level === 'Attended', placeholder: 'Agency' },
+                    { label: 'Start Date', key: 'start_date', type: 'date', required: true }, 
+                    { label: 'End Date', key: 'end_date', type: 'date', required: true },
+                    { label: 'Remarks', key: 'remarks', placeholder: 'Remarks' },
+                    { label: 'Document proof upload', key: 'certificate_link', type: 'file', required: true },
+                    {
+                        label: 'Faculty Participants', key: 'faculty_participants', type: 'objectList', subFields: [
+                            { label: 'Author Type', key: 'author_type', type: 'select', options: ['Internal Author', 'External Author'], required: true, placeholder: 'Select type' },
+                            { label: 'Faculty Name', key: 'name', required: true, placeholder: 'Enter name' },
+                            { label: 'Employee Code', key: 'emp_code', showIf: (item) => item.author_type === 'Internal Author', requiredIf: (item) => item.author_type === 'Internal Author', placeholder: 'Enter employee code' }
+                        ]
+                    },
+                    {
+                        label: 'External Participants', key: 'external_participants', type: 'objectList', subFields: [
+                            { label: 'Name', key: 'name', required: true }, { label: 'Role', key: 'role', required: true }, { label: 'Affiliation', key: 'affiliation' }
+                        ]
+                    }
+                ]}
+            />
+
+            {/* 3.. Textareas */}
+            < div className="space-y-6 pt-6 border-t border-gray-100" >
+                <div>
+                    <label className="block text-md font-semibold text-gray-800 mb-2">9. SUMMER INSTITUTES, REFRESHER OR ORIENTATION COURSES</label>
+                    <div className="space-y-4">
+                        <DynamicTableSection
+                            title="9.1. ATTENDED"
+                            data={formData.research.summer_institutes_attended || []}
+                            uniqueKey="description"
+                            {...createHandlers('summer_institutes_attended')}
+                            readOnly={readOnly}
+                            initialItem={{ description: '' }}
+                            fields={[{ label: 'Description', key: 'description', fullWidth: true, required: true, placeholder: 'Enter details' }]}
+                        />
+                        <DynamicTableSection
+                            title="9.2. ORGANIZED / CONDUCTED"
+                            data={formData.research.summer_institutes_organized || []}
+                            uniqueKey="description"
+                            {...createHandlers('summer_institutes_organized')}
+                            readOnly={readOnly}
+                            initialItem={{ description: '' }}
+                            fields={[{ label: 'Description', key: 'description', fullWidth: true, required: true, placeholder: 'Enter details' }]}
+                        />
+                    </div>
+                </div>
+                <div className="space-y-4">
+                    <label className="block text-md font-semibold text-gray-800 mb-2">10. DETAILS OF GUIDANCE FOR:</label>
+                    <DynamicTableSection
+                        title="10.1. U.G. AND P.G. PROJECT GUIDANCE"
+                        data={formData.research.ug_pg_guidance || []}
+                        uniqueKey="description"
+                        {...createHandlers('ug_pg_guidance')}
+                        readOnly={readOnly}
+                        initialItem={{ description: '' }}
+                        fields={[{ label: 'Description', key: 'description', fullWidth: true, required: true, placeholder: 'Enter details' }]}
+                    />
+
+                    <DynamicTableSection
+                        title="10.2. RESEARCH GUIDANCE"
+                        data={formData.research.research_guidance || []}
+                        uniqueKey="description"
+                        {...createHandlers('research_guidance')}
+                        readOnly={readOnly}
+                        initialItem={{ description: '' }}
+                        fields={[{ label: 'Description', key: 'description', fullWidth: true, required: true, placeholder: 'Enter details' }]}
+                    />
+                </div>
+            </div>
+
+            {/* 5) Patents & Consultancy */}
+            <div className="pt-6 border-t border-gray-100 space-y-8">
+                <div>
+                    <label className="block text-md font-semibold text-gray-800 mb-2">11. DETAILS OF INDUSTRIAL INTERACTION / PROFESSIONAL CONSULTANCY / PATENTS</label>
+
+
+
+                    <DynamicTableSection
+                        title="11.1. PATENTS (OBTAINED OR APPLIED FOR)"
+                        data={formData.research.patents || []}
+                        uniqueKey="patent_title"
+                        {...createHandlers('patents')}
+                        readOnly={readOnly}
+                        initialItem={{
+                            department_id: '',
+                            patent_title: '',
+                            author_names: '',
+                            application_number: '',
+                            patent_number: '',
+                            status: '',
+                            country: '',
+                            patent_awarding_agency: '',
+                            date_of_filing: '',
+                            date_of_published: '',
+                            date_of_award: '',
+                            link_to_patent: '',
+                            link: ''
+                        }}
+                        fields={[
+                            { label: 'Department / Centre ID', key: 'department_id', type: 'entitySelect', entityType: 'department', required: true },
+                            { label: 'Title', key: 'patent_title', required: true, placeholder: 'Enter patent title' },
+                            { label: 'Authors', key: 'author_names', required: true, placeholder: 'Enter authors' },
+                            { label: 'Status', key: 'status', type: 'select', options: ['Filed', 'Published', 'Granted'], required: true, placeholder: 'Select status' },
+                            { label: 'Application No.', key: 'application_number', required: true, placeholder: 'Application No' },
+                            { label: 'Patent No.', key: 'patent_number', disabled: (item) => item?.status !== 'Granted', requiredIf: (item) => item?.status === 'Granted', placeholder: 'Patent No' },
+                            { label: 'Country', key: 'country', required: true, placeholder: 'Country' },
+                            { label: 'Awarding Agency', key: 'patent_awarding_agency', required: true, placeholder: 'Agency' },
+                            { label: 'Filing Date', key: 'date_of_filing', type: 'date', required: true },
+                            { label: 'Published Date', key: 'date_of_published', type: 'date', requiredIf: (item) => item?.status === 'Published' },
+                            { label: 'Award Date', key: 'date_of_award', type: 'date', requiredIf: (item) => item?.status === 'Granted' },
+                            { label: 'Upload PDF Proof', key: 'link_to_patent', type: 'file', required: true },
+                            {
+                                label: 'Faculty Members', key: 'faculty_members', type: 'objectList', subFields: [
+                                    { label: 'Author Type', key: 'author_type', type: 'select', options: ['Internal Author', 'External Author'], required: true, placeholder: 'Select type' },
+                                    { label: 'Faculty Name', key: 'name', required: true, placeholder: 'Enter name' },
+                                    { label: 'Employee Code', key: 'emp_code', showIf: (item) => item.author_type === 'Internal Author', requiredIf: (item) => item.author_type === 'Internal Author', placeholder: 'Enter employee code' }
+                                ]
+                            },
+                            {
+                                label: 'Students', key: 'students', type: 'objectList', subFields: [
+                                    { label: 'Student Name', key: 'name', required: true, placeholder: 'Enter student name' },
+                                    { label: 'Student Roll No', key: 'roll_no', required: true, placeholder: 'Enter roll no' }
+                                ]
+                            },
+                            {
+                                label: 'External Inventors', key: 'external_inventors', type: 'objectList', subFields: [
+                                    { label: 'Name', key: 'name', required: true },
+                                    { label: 'Role', key: 'role', required: true },
+                                    { label: 'Affiliation', key: 'affiliation' }
+                                ]
+                            }
+                        ]}
+                    />
+
+                    <div className="mt-8"></div>
+
+                    <DynamicTableSection
+                        title="11.2. PROFESSIONAL CONSULTANCY"
+                        data={formData.research.consultancy || []}
+                        uniqueKey="name_of_project"
+                        {...createHandlers('consultancy')}
+                        readOnly={readOnly}
+                        initialItem={{ name_of_project: '', agency_name: '', grant_amount: '', status: '', start_date: '', end_date: '', type_of_agency: '', consultancy_type: '', year_of_consultancy: '', revenue_generated: '', link: '', faculty_involved: [], students_involved: [], external_collaborators: [], external_consultants: [] }}
+                        fields={[
+                            { label: 'Project Name', key: 'name_of_project', required: true, placeholder: 'Enter project name' },
+                            { label: 'Agency', key: 'agency_name', required: true, placeholder: 'Enter agency' },
+                            { label: 'Type', key: 'type_of_agency', type: 'select', options: ['Government', 'Private'], required: true, placeholder: 'Select type' },
+                            { label: 'Grant', key: 'grant_amount', type: 'number', min: 0, required: true, placeholder: 'Amount' },
+                            { label: 'Revenue', key: 'revenue_generated', type: 'number', min: 0, required: true, placeholder: 'Revenue' },
+                            { label: 'Status', key: 'status', type: 'select', options: ['Ongoing', 'Completed'], required: true, placeholder: 'Select status' },
+                            { label: 'Start Date', key: 'start_date', type: 'date', required: true },
+                            { label: 'End Date', key: 'end_date', type: 'date', requiredIf: (item) => item?.status !== 'Ongoing' },
+                            { label: 'upload proof', key: 'link', type: 'file', required: true },
+                            {
+                                label: 'Faculty Involved', key: 'faculty_involved', type: 'objectList', subFields: [
+                                    { label: 'Author Type', key: 'author_type', type: 'select', options: ['Internal Author', 'External Author'], required: true, placeholder: 'Select type' },
+                                    { label: 'Faculty Name', key: 'name', required: true, placeholder: 'Enter name' },
+                                    { label: 'Employee Code', key: 'emp_code', showIf: (item) => item.author_type === 'Internal Author', requiredIf: (item) => item.author_type === 'Internal Author', placeholder: 'Enter employee code' }
+                                ]
+                            },
+                            {
+                                label: 'Students Involved', key: 'students_involved', type: 'objectList', subFields: [
+                                    { label: 'Student Name', key: 'name', required: true, placeholder: 'Enter student name' },
+                                    { label: 'Student Roll No', key: 'roll_no', required: true, placeholder: 'Enter roll no' },
+                                    { label: 'Role', key: 'role', required: true }
+                                ]
+                            },
+                            {
+                                label: 'External Collaborators', key: 'external_collaborators', type: 'objectList', subFields: [
+                                    { label: 'Name', key: 'name', required: true },
+                                    { label: 'Role', key: 'role', required: true },
+                                    { label: 'Affiliation', key: 'affiliation' }
+                                ]
+                            }
+                        ]}
+                    />
+                </div>
+            </div>
+
+            {/* 6 & 7 Textareas */}
+            <div className="space-y-6 pt-6 border-t border-gray-100">
+                <DynamicTableSection
+                    title="12. MEMBERSHIP OR FELLOWSHIP OF PROFESSIONAL/ACADEMIC BODIES, SOCIETIES ETC."
+                    data={formData.research.memberships_text || []}
+                    uniqueKey="description"
+                    {...createHandlers('memberships_text')}
+                    readOnly={readOnly}
+                    initialItem={{ description: '' }}
+                    fields={[{ label: 'Description', key: 'description', fullWidth: true, required: true, placeholder: 'Enter details' }]}
+                />
+
+                <DynamicTableSection
+                    title="13. ANY OTHER INFORMATION REGARDING ACADEMIC ACTIVITIES NOT COVERED"
+                    data={formData.research.other_activities || []}
+                    uniqueKey="description"
+                    {...createHandlers('other_activities')}
+                    readOnly={readOnly}
+                    initialItem={{ description: '' }}
+                    fields={[{ label: 'Description', key: 'description', fullWidth: true, required: true, placeholder: 'Enter details' }]}
+                />
+            </div>
+        </div >
+    );
+}
+
